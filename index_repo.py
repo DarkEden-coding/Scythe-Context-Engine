@@ -7,13 +7,17 @@ Usage: python index_repo.py /path/to/repo --output repo_index
 """
 
 import argparse
+import json
+import pickle
 from collections import defaultdict
+from pathlib import Path
 
 from line_profiler import profile
 
 from indexer.file_processor import (
     collect_files_to_process,
     generate_folder_summaries,
+    hash_file,
     process_files,
 )
 from indexer.embedder import create_faiss_index, save_index
@@ -28,49 +32,127 @@ def index_repo(repo_path: str, output_prefix: str):
         output_prefix: Directory prefix where index files will be saved.
     """
     print(f"📁 Indexing {repo_path}...")
+    repo_path_obj = Path(repo_path)
+    output_path = Path(output_prefix)
 
-    # 1. Collect files to process
-    files_to_process = collect_files_to_process(repo_path)
-    print(f"📄 Found {len(files_to_process)} code files")
+    # 1. Load existing state if available
+    old_chunks = []
+    old_hashes = {}
+    if (output_path / "chunks.pkl").exists() and (output_path / "meta.json").exists():
+        print("🔄 Loading existing index for incremental update...")
+        try:
+            with open(output_path / "chunks.pkl", "rb") as f:
+                old_chunks = pickle.load(f)
+            with open(output_path / "meta.json", "r") as f:
+                meta = json.load(f)
+                old_hashes = meta.get("file_hashes", {})
+        except Exception as e:
+            print(f"⚠️ Could not load existing index: {e}. Performing full re-index.")
+            old_chunks = []
+            old_hashes = {}
 
-    # 1.5. Show folder overview and get confirmation
-    folder_counts = defaultdict(int)
-    for file_path in files_to_process:
-        rel_path = file_path.relative_to(repo_path)
-        folder = str(rel_path.parent)
-        if folder == ".":
-            folder = "(root)"
-        folder_counts[folder] += 1
+    # 2. Collect files and identify changes
+    all_files = collect_files_to_process(repo_path)
+    current_hashes = {str(f.relative_to(repo_path)): hash_file(f) for f in all_files}
 
+    added_files = []
+    modified_files = []
+    unchanged_files = []
+    deleted_files = [f for f in old_hashes if f not in current_hashes]
+
+    for rel_path, current_hash in current_hashes.items():
+        if rel_path not in old_hashes:
+            added_files.append(repo_path_obj / rel_path)
+        elif old_hashes[rel_path] != current_hash:
+            modified_files.append(repo_path_obj / rel_path)
+        else:
+            unchanged_files.append(repo_path_obj / rel_path)
+
+    files_to_process = added_files + modified_files
+
+    # 3. Show overview and get confirmation
     print("\n📂 Repository Overview:")
     print("=" * 50)
-    for folder, count in sorted(folder_counts.items()):
-        print(f"  {folder}: {count} code files")
+    if not old_hashes:
+        print(f"  Total files to index: {len(all_files)}")
+    else:
+        print(f"  Unchanged: {len(unchanged_files)}")
+        print(f"  Added:     {len(added_files)}")
+        print(f"  Modified:  {len(modified_files)}")
+        print(f"  Deleted:   {len(deleted_files)}")
     print("=" * 50)
+
+    if not files_to_process and not deleted_files:
+        print("✅ Index is already up to date. No changes detected.")
+        return
 
     confirm = input("\nProceed with indexing? (y/N): ").lower().strip()
     if confirm not in ["y", "yes"]:
         print("Indexing cancelled.")
         return
 
-    # 2. Process files to extract chunks and summaries
-    chunks, file_summaries = process_files(files_to_process, repo_path, output_prefix)
+    # 4. Filter old chunks (keep only those from unchanged files)
+    # We remove both code chunks and file summaries for modified/deleted files
+    changed_rel_paths = set(
+        [str(f.relative_to(repo_path)) for f in modified_files] + deleted_files
+    )
 
-    # 3. Generate folder summaries
+    # Keep chunks that are NOT from changed files AND are not folder summaries
+    # (folder summaries are regenerated)
+    kept_chunks = [
+        c
+        for c in old_chunks
+        if c.get("metadata", {}).get("file") not in changed_rel_paths
+        and c.get("metadata", {}).get("level") != "folder_summary"
+    ]
+
+    # 5. Process new/modified files
+    new_chunks = []
+    file_summaries = {}
+    if files_to_process:
+        print(f"📄 Processing {len(files_to_process)} changed/new files...")
+        new_chunks, file_summaries = process_files(
+            files_to_process, repo_path, output_prefix
+        )
+
+    # Merge file summaries: old ones for unchanged files + new ones
+    all_file_summaries = {}
+    # Extract file summaries from kept_chunks
+    for c in kept_chunks:
+        if c.get("metadata", {}).get("level") == "file_summary":
+            rel_path = c["metadata"]["file"]
+            # Extract the summary text from the chunk text "FILE: rel_path\nsummary"
+            summary = c["text"].split("\n", 1)[1] if "\n" in c["text"] else ""
+            all_file_summaries[rel_path] = summary
+
+    all_file_summaries.update(file_summaries)
+
+    # Combine chunks
+    combined_chunks = kept_chunks + new_chunks
+
+    # 6. Generate folder summaries (always regenerate to stay accurate)
     print("📂 Generating folder summaries...")
-    chunks = generate_folder_summaries(file_summaries, chunks)
+    final_chunks = generate_folder_summaries(all_file_summaries, combined_chunks)
 
-    print(f"✅ Extracted {len(chunks)} total chunks")
+    print(f"✅ Total chunks: {len(final_chunks)} ({len(new_chunks)} new/updated)")
 
-    # 4. Create FAISS index
+    # 7. Create FAISS index
     print("🔢 Embedding chunks...")
-    index, embedding_dim = create_faiss_index(chunks)
+    index, embedding_dim, indexed_chunks = create_faiss_index(final_chunks)
 
-    # 5. Save index
+    # 8. Save index and update metadata with hashes
     print("💾 Saving index...")
-    save_index(index, chunks, repo_path, output_prefix, embedding_dim)
+    save_index(index, indexed_chunks, repo_path, output_prefix, embedding_dim)
 
-    print(f"✅ Index saved to {output_prefix}/ ({len(chunks)} chunks)")
+    # Update meta.json with file hashes
+    with open(output_path / "meta.json", "r") as f:
+        meta = json.load(f)
+
+    meta["file_hashes"] = current_hashes
+    with open(output_path / "meta.json", "w") as f:
+        json.dump(meta, f, indent=2)
+
+    print(f"✅ Index updated in {output_prefix}/ ({len(indexed_chunks)} chunks)")
 
 
 if __name__ == "__main__":

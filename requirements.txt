@@ -14,3 +14,4 @@ tqdm>=4.65.0
 line-profiler>=4.0.0
 einops
 requests>=2.31.0
+rich>=13.0.0

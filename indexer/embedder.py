@@ -83,53 +83,71 @@ def create_faiss_index(chunks: List[Dict]) -> tuple:
     Returns:
         Tuple containing (faiss_index, embedding_dimension).
     """
-    texts = [c["text"] for c in chunks]
+    # Identify chunks that need embedding
+    chunks_to_embed = [c for c in chunks if "embedding" not in c]
+    texts_to_embed = [c["text"] for c in chunks_to_embed]
 
-    # Batch embed with nomic
-    batch_size = 32
-    embeddings = [None] * len(texts)  # Pre-allocate to maintain order
+    if texts_to_embed:
+        # Batch embed with nomic
+        batch_size = 32
+        new_embeddings = [None] * len(texts_to_embed)  # Pre-allocate to maintain order
 
-    # Prepare batches with indices
-    batches = []
-    for i in range(0, len(texts), batch_size):
-        batch_texts = texts[i : i + batch_size]
-        batches.append((i // batch_size, batch_texts))
+        # Prepare batches with indices
+        batches = []
+        for i in range(0, len(texts_to_embed), batch_size):
+            batch_texts = texts_to_embed[i : i + batch_size]
+            batches.append((i // batch_size, batch_texts))
 
-    # Thread-safe embeddings list
-    embeddings_lock = threading.Lock()
+        # Thread-safe embeddings list
+        embeddings_lock = threading.Lock()
 
-    def collect_embedding_result(future):
-        """Collect results from completed embedding futures."""
-        batch_idx, batch_embs, success = future.result()
-        if success and batch_embs is not None:
-            start_idx = batch_idx * batch_size
-            with embeddings_lock:
-                for j, emb in enumerate(batch_embs):
-                    embeddings[start_idx + j] = emb
+        def collect_embedding_result(future):
+            """Collect results from completed embedding futures."""
+            batch_idx, batch_embs, success = future.result()
+            if success and batch_embs is not None:
+                start_idx = batch_idx * batch_size
+                with embeddings_lock:
+                    for j, emb in enumerate(batch_embs):
+                        new_embeddings[start_idx + j] = emb
 
-    # Process batches with 32 threads
-    with ThreadPoolExecutor(max_workers=32) as executor:
-        futures = [
-            executor.submit(embed_batch_with_retry, batch_idx, batch_texts)
-            for batch_idx, batch_texts in batches
-        ]
+        # Process batches with 32 threads
+        with ThreadPoolExecutor(max_workers=32) as executor:
+            futures = [
+                executor.submit(embed_batch_with_retry, batch_idx, batch_texts)
+                for batch_idx, batch_texts in batches
+            ]
 
-        # Use tqdm to track progress
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Embedding"):
-            collect_embedding_result(future)
+            # Use tqdm to track progress
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Embedding"
+            ):
+                collect_embedding_result(future)
 
-    # Handle missing embeddings (failed batches)
-    chunks, embeddings = collect_successful_chunks_and_embeddings(chunks, embeddings)
+        # Assign new embeddings to chunks
+        for i, chunk in enumerate(chunks_to_embed):
+            if new_embeddings[i] is not None:
+                chunk["embedding"] = new_embeddings[i]
 
-    embeddings = np.array(embeddings).astype("float32")
-    faiss.normalize_L2(embeddings)  # Normalize for cosine similarity
+    # Filter out chunks that still don't have embeddings (failed to embed)
+    successful_chunks = [c for c in chunks if "embedding" in c]
+    missing_count = len(chunks) - len(successful_chunks)
+    if missing_count > 0:
+        print(f"Warning: {missing_count} chunks failed to embed and will be skipped")
+
+    # Update the chunks list in place if possible, or return the successful ones
+    # For FAISS, we need the array of all successful embeddings
+    all_embeddings = np.array([c["embedding"] for c in successful_chunks]).astype(
+        "float32"
+    )
+    faiss.normalize_L2(all_embeddings)  # Normalize for cosine similarity
 
     # Build FAISS index
-    d = embeddings.shape[1]
+    d = all_embeddings.shape[1]
     index = faiss.IndexFlatIP(d)  # type: ignore  # Inner product = cosine (normalized)
-    index.add(embeddings)  # type: ignore
+    index.add(all_embeddings)  # type: ignore
 
-    return index, d
+    # Return the potentially filtered list of chunks as well
+    return index, d, successful_chunks
 
 
 def save_index(

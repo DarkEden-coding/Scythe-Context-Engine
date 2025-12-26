@@ -2,6 +2,7 @@
 File collection and processing logic.
 """
 
+import hashlib
 import os
 import threading
 import traceback
@@ -17,6 +18,23 @@ from .ast_parser import extract_chunks
 from config import IGNORED_DIRS, IGNORED_FILES, SUPPORTED_LANGS
 from .summarizer import summarize_file, summarize_folder
 from .chunk_storage import generate_chunk_id, save_full_chunk
+
+
+def hash_file(file_path: Path) -> str:
+    """Calculate SHA-256 hash of a file.
+
+    Args:
+        file_path: Path to the file to hash.
+
+    Returns:
+        Hexadecimal SHA-256 hash string.
+    """
+    hasher = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        # Read in 64kb chunks
+        for chunk in iter(lambda: f.read(65536), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 def collect_files_to_process(repo_path: str) -> List[Path]:
@@ -49,7 +67,9 @@ def collect_files_to_process(repo_path: str) -> List[Path]:
 
 
 @profile
-def process_single_file(file_path: Path, repo_path: str, output_prefix: Optional[str] = None) -> tuple:
+def process_single_file(
+    file_path: Path, repo_path: str, output_prefix: Optional[str] = None
+) -> tuple:
     """Process a single file to extract chunks and summary.
 
     Args:
@@ -85,21 +105,29 @@ def process_single_file(file_path: Path, repo_path: str, output_prefix: Optional
 def _extract_file_chunks(code: str, lang: str, rel_path: str) -> List[Dict]:
     """Extract chunks from file based on language type."""
     if lang == "markdown":
-        return [{
-            "text": code,
-            "metadata": {
-                "level": "document",
-                "file": rel_path,
-                "type": "markdown",
-                "location": {"file": rel_path},
-            },
-        }]
+        return [
+            {
+                "text": code,
+                "metadata": {
+                    "level": "document",
+                    "file": rel_path,
+                    "type": "markdown",
+                    "location": {"file": rel_path},
+                },
+            }
+        ]
     else:
         # Extract code chunks for programming languages
         return extract_chunks(code, lang, rel_path)
 
 
-def _process_chunks(file_chunks: List[Dict], code: str, rel_path: str, file_path: Path, output_prefix: Optional[str]) -> None:
+def _process_chunks(
+    file_chunks: List[Dict],
+    code: str,
+    rel_path: str,
+    file_path: Path,
+    output_prefix: Optional[str],
+) -> None:
     """Process chunks to generate IDs and save content."""
     for chunk in file_chunks:
         metadata = chunk["metadata"]
@@ -108,10 +136,18 @@ def _process_chunks(file_chunks: List[Dict], code: str, rel_path: str, file_path
         if level == "code_chunk":
             _process_code_chunk(chunk, metadata, rel_path, file_path, output_prefix)
         elif level == "document":
-            _process_document_chunk(chunk, metadata, code, rel_path, file_path, output_prefix)
+            _process_document_chunk(
+                chunk, metadata, code, rel_path, file_path, output_prefix
+            )
 
 
-def _process_code_chunk(chunk: Dict, metadata: Dict, rel_path: str, file_path: Path, output_prefix: Optional[str]) -> None:
+def _process_code_chunk(
+    chunk: Dict,
+    metadata: Dict,
+    rel_path: str,
+    file_path: Path,
+    output_prefix: Optional[str],
+) -> None:
     """Process a code chunk."""
     function_name = metadata.get("function_name", "unknown")
     docstring = metadata.get("docstring")
@@ -138,9 +174,16 @@ def _process_code_chunk(chunk: Dict, metadata: Dict, rel_path: str, file_path: P
         chunk["text"] = "\n".join(metadata_text_parts)
 
 
-def _process_document_chunk(chunk: Dict, metadata: Dict, code: str, rel_path: str, file_path: Path, output_prefix: Optional[str]) -> None:
+def _process_document_chunk(
+    chunk: Dict,
+    metadata: Dict,
+    code: str,
+    rel_path: str,
+    file_path: Path,
+    output_prefix: Optional[str],
+) -> None:
     """Process a document chunk."""
-    lines = code.split('\n')
+    lines = code.split("\n")
     chunk_id = generate_chunk_id(rel_path, 1, len(lines))
 
     metadata["chunk_id"] = chunk_id
@@ -174,7 +217,9 @@ def _generate_file_summary(code: str, rel_path: str) -> tuple:
 
 
 @profile
-def process_files(files_to_process: List[Path], repo_path: str, output_prefix: Optional[str] = None) -> tuple:
+def process_files(
+    files_to_process: List[Path], repo_path: str, output_prefix: Optional[str] = None
+) -> tuple:
     """Process files to extract chunks and file summaries using multithreading.
 
     Args:

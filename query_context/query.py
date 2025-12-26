@@ -2,7 +2,6 @@
 
 import json
 import pickle
-from typing import Optional
 
 import faiss
 import numpy as np
