@@ -1,2 +1,4 @@
 /test_index
 config.json
+.venv
+.env
