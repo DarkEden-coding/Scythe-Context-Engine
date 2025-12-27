@@ -3,7 +3,7 @@
 import hashlib
 from typing import Dict, List, Optional
 
-from config import CACHE_TTL, cache
+from config.config import CACHE_TTL, cache
 
 
 def check_cache(query: str, top_chunks: List[Dict]) -> Optional[str]:

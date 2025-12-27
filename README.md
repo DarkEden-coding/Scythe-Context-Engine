@@ -69,7 +69,7 @@ Options:
 
 ## Configuration
 
-Edit `config.py` to configure:
+Edit `config/config.py` to configure:
 - **Provider**: Choose between `openrouter` or `ollama`
 - **Models**: Set embedding and summarization models
 - **API Keys**: Configure OpenRouter API key

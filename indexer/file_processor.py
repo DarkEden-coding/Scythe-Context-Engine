@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from line_profiler import profile
 from .ast_parser import extract_chunks
-from config import IGNORED_DIRS, IGNORED_FILES, SUPPORTED_LANGS
+from config.config import IGNORED_DIRS, IGNORED_FILES, SUPPORTED_LANGS
 from .summarizer import summarize_file, summarize_folder
 from .chunk_storage import generate_chunk_id, save_full_chunk
 
@@ -164,12 +164,17 @@ def _process_code_chunk(
             save_full_chunk(chunk_id, chunk["text"], output_prefix, extension)
             metadata["full_code_path"] = f"full_chunks/{chunk_id}{extension}"
 
-        # Build searchable text from metadata
-        metadata_text_parts = [f"Function: {function_name}"]
+        # Build searchable text from metadata ONLY
+        # Embedding models work best with natural language descriptions, not raw code
+        # The full code is saved separately and loaded during the refinement phase
+        metadata_text_parts = []
+        if function_name != "unknown":
+            metadata_text_parts.append(f"Function: {function_name}")
         metadata_text_parts.append(f"File: {rel_path}")
         metadata_text_parts.append(f"Lines: {start_line}-{end_line}")
+        metadata_text_parts.append(f"Type: {metadata.get('type', 'code')}")
         if docstring:
-            metadata_text_parts.append(f"Docstring: {docstring}")
+            metadata_text_parts.append(f"Documentation: {docstring}")
 
         chunk["text"] = "\n".join(metadata_text_parts)
 

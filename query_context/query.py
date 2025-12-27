@@ -6,7 +6,7 @@ import pickle
 import faiss
 import numpy as np
 
-from config import EMBEDDING_MODEL, embed_single
+from config.config import EMBEDDING_MODEL, embed_single
 from .cache import check_cache, store_cache
 from .refinement import rerank_and_extract
 
@@ -67,15 +67,13 @@ def query_context(
     scores, indices = index.search(query_emb, top_k)
 
     # Filter low scores
-
     results = []
 
     for i, idx in enumerate(indices[0]):
-        if scores[0][i] > 0.5:  # Threshold
+        # Relaxed threshold to allow more potential matches for the reranker
+        if scores[0][i] > 0.3:
             chunk = chunks[idx]
-
             chunk["score"] = float(scores[0][i])
-
             results.append(chunk)
 
     print(f"✅ Found {len(results)} relevant chunks")

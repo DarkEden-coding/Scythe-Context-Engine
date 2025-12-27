@@ -5,15 +5,16 @@ Shared configuration for Scythe Context Engine.
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional, Sequence, Literal
 
 from ollama import Client
 from cache import Cache
-from openrouter_client import OpenRouterClient, OpenRouterError
+from openrouter_client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = "config/config.json"
 ProviderType = Literal["openrouter", "ollama"]
 
 
@@ -21,7 +22,7 @@ def _load_config() -> Dict[str, Any]:
     if not os.path.exists(CONFIG_FILE):
         raise FileNotFoundError(
             f"Configuration file '{CONFIG_FILE}' not found. "
-            "Run 'python create_config.py' to create it."
+            "Run 'python config/create_config.py' to create it."
         )
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -69,24 +70,48 @@ def _require_openrouter() -> OpenRouterClient:
     return _openrouter_client
 
 
+def _retry_with_backoff(func, *args, **kwargs):
+    """Utility for retrying API calls with exponential backoff on rate limits only."""
+    max_retries = 5
+    base_delay = 2.0
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            # Only retry on 429 rate limit errors
+            is_rate_limit = "429" in str(e) or "rate" in str(e).lower()
+            if is_rate_limit and attempt < max_retries - 1:
+                delay = base_delay * (2**attempt)
+                logger.warning(
+                    "Rate limit hit (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt + 1,
+                    max_retries,
+                    delay,
+                    e,
+                )
+                time.sleep(delay)
+            else:
+                # Non-rate-limit errors or final attempt - raise immediately
+                raise
+    return None
+
+
 def embed_texts(texts: Sequence[str], model: Optional[str] = None) -> List[List[float]]:
     chosen_model = model or _default_embedding_model()
 
-    if PROVIDER == "openrouter":
-        client = _require_openrouter()
-        options = _get_openrouter_options(None, "embedding")
-        try:
+    def _call():
+        if PROVIDER == "openrouter":
+            client = _require_openrouter()
+            options = _get_openrouter_options(None, "embedding")
             return client.embed_texts(list(texts), chosen_model, options=options)
-        except OpenRouterError as exc:
-            logger.error("OpenRouter embeddings failed: %s", exc)
-            raise
 
-    # Ollama branch
-    # Note: Using required_permissions=['network'] if calling real API
-    response = ollama_client.embed(model=chosen_model, input=list(texts))
-    if "embeddings" not in response:
-        raise ValueError("Ollama response missing 'embeddings' key.")
-    return response["embeddings"]
+        # Ollama branch
+        response = ollama_client.embed(model=chosen_model, input=list(texts))
+        if "embeddings" not in response:
+            raise ValueError("Ollama response missing 'embeddings' key.")
+        return response["embeddings"]
+
+    return _retry_with_backoff(_call)
 
 
 def embed_single(text: str, model: Optional[str] = None) -> List[float]:
@@ -102,26 +127,25 @@ def chat_completion(
 ) -> Any:
     chosen_model = model or _default_chat_model()
 
-    if PROVIDER == "openrouter":
-        client = _require_openrouter()
-        req_options = _get_openrouter_options(options, "chat")
-        try:
+    def _call():
+        if PROVIDER == "openrouter":
+            client = _require_openrouter()
+            req_options = _get_openrouter_options(options, "chat")
             return client.chat_completion(
                 messages=list(messages),
                 model=chosen_model,
                 response_format=response_format,
                 options=req_options,
             )
-        except OpenRouterError as exc:
-            logger.error("OpenRouter chat completion failed: %s", exc)
-            raise
 
-    return ollama_client.chat(
-        model=chosen_model,
-        messages=list(messages),
-        format=response_format,
-        options=options or {},
-    )
+        return ollama_client.chat(
+            model=chosen_model,
+            messages=list(messages),
+            format=response_format,
+            options=options or {},
+        )
+
+    return _retry_with_backoff(_call)
 
 
 def generate_text(
@@ -131,22 +155,21 @@ def generate_text(
 ) -> str:
     chosen_model = model or _default_chat_model()
 
-    if PROVIDER == "openrouter":
-        client = _require_openrouter()
-        req_options = _get_openrouter_options(options, "chat")
-        try:
+    def _call():
+        if PROVIDER == "openrouter":
+            client = _require_openrouter()
+            req_options = _get_openrouter_options(options, "chat")
             return client.generate_text(prompt, chosen_model, options=req_options)
-        except OpenRouterError as exc:
-            logger.error("OpenRouter text generation failed: %s", exc)
-            raise
 
-    response = ollama_client.generate(
-        model=chosen_model, prompt=prompt, options=options or {}
-    )
-    content = response.get("response")
-    if not isinstance(content, str):
-        raise ValueError("Ollama response missing text content.")
-    return content
+        response = ollama_client.generate(
+            model=chosen_model, prompt=prompt, options=options or {}
+        )
+        content = response.get("response")
+        if not isinstance(content, str):
+            raise ValueError("Ollama response missing text content.")
+        return content
+
+    return _retry_with_backoff(_call)
 
 
 def _default_chat_model() -> str:
@@ -165,10 +188,32 @@ def _default_embedding_model() -> str:
     )
 
 
+def _set_additional_properties_false(schema: Any) -> None:
+    """Recursively set additionalProperties: False on all objects in a JSON schema.
+
+    This is required for 'strict' mode in some providers like OpenAI and Groq.
+    """
+    if not isinstance(schema, dict):
+        return
+
+    if schema.get("type") == "object":
+        schema.setdefault("additionalProperties", False)
+
+    for value in schema.values():
+        if isinstance(value, dict):
+            _set_additional_properties_false(value)
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, dict):
+                    _set_additional_properties_false(item)
+
+
 def build_structured_output_format(
     schema: Dict[str, Any], schema_name: str
 ) -> Optional[Dict[str, Any]]:
     if PROVIDER == "openrouter":
+        # Ensure schema is strict-compliant
+        _set_additional_properties_false(schema)
         return {
             "type": "json_schema",
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},

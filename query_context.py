@@ -20,9 +20,9 @@ if __name__ == "__main__":
 
     parser.add_argument("--index", default="repo_index", help="Index prefix")
 
-    parser.add_argument("--top-k", type=int, default=20, help="Initial retrieval count")
+    parser.add_argument("--top-k", type=int, default=30, help="Initial retrieval count")
 
-    parser.add_argument("--output-k", type=int, default=5, help="Final context chunks")
+    parser.add_argument("--output-k", type=int, default=10, help="Final context chunks")
 
     parser.add_argument("--no-cache", action="store_true", help="Do not use cache")
 

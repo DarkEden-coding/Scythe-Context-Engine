@@ -6,7 +6,7 @@ import traceback
 from pathlib import Path
 from typing import List
 
-from config import (
+from config.config import (
     SUMMARIZATION_MODEL,
     build_structured_output_format,
     chat_completion,
@@ -26,15 +26,12 @@ def summarize_file(code: str, file_path: str) -> str:
         One to two sentence summary of the file's purpose and key components.
     """
     try:
-        prompt = f"""Summarize this {Path(file_path).suffix} file in 1-2 sentences.
+        prompt = f"""Summarize this {Path(file_path).suffix} file in 1-2 sentences based on the code provided.
 
-Focus on: purpose, key functions/classes, dependencies.
+Focus on: main purpose, key functions/classes, and specific technologies or patterns you can identify.
+Be factual - only describe what you actually see in the code.
 
-
-
-{code[:3000]}
-
-
+{code[:3500]}
 
 Summary:"""
 

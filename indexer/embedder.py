@@ -14,7 +14,7 @@ import faiss
 import numpy as np
 from tqdm import tqdm
 
-from config import EMBEDDING_MODEL, embed_texts
+from config.config import EMBEDDING_MODEL, embed_texts
 
 
 def embed_batch_with_retry(batch_idx: int, batch_texts: List[str]) -> tuple:

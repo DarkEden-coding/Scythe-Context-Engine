@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Dict
 
-from config import SUPPORTED_LANGS
+from config.config import SUPPORTED_LANGS
 
 
 def generate_chunk_id(file_path: str, start_line: int, end_line: int) -> str:

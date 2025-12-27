@@ -2,7 +2,12 @@
 
 from typing import Dict, List
 
-from config import SUMMARIZATION_MODEL, build_structured_output_format, chat_completion, extract_chat_content
+from config.config import (
+    SUMMARIZATION_MODEL,
+    build_structured_output_format,
+    chat_completion,
+    extract_chat_content,
+)
 from .models import ChunkRanking
 
 
@@ -13,9 +18,9 @@ def _select_rerank_candidates(chunks: List[Dict]) -> List[Dict]:
         chunks: All retrieved chunks from the initial search.
 
     Returns:
-        First 15 chunks to be reranked by the LLM.
+        First 25 chunks to be reranked by the LLM.
     """
-    return chunks[:15]
+    return chunks[:25]
 
 
 def _build_rerank_prompt(rerank_chunks: List[Dict], query: str) -> str:
@@ -50,10 +55,14 @@ def _build_rerank_prompt(rerank_chunks: List[Dict], query: str) -> str:
     combined_chunks = "\n---\n".join(chunk_sections)
     max_index = max(len(rerank_chunks) - 1, 0)
     return (
-        f'Rate the relevance (0-10) of each code chunk to the query: "{query}"\n\n'
-        f"Chunks to rank (metadata only):\n\n{combined_chunks}\n"
-        f'Provide rankings as a list of objects with "chunk_id" (integer; 0-{max_index}) '
-        'and "score" (number 0-10).\nReturn ONLY valid JSON matching this schema:\n'
+        f'Rate the relevance (0-10) of each chunk to the query: "{query}"\n\n'
+        "Score based on:\n"
+        "- How directly the function/file relates to the query topic\n"
+        "- Whether the metadata (function name, file path, documentation) matches the query\n"
+        "- Use your judgment, but do not infer what the code does beyond what's stated\n\n"
+        f"Chunks to rank:\n\n{combined_chunks}\n"
+        f'Provide rankings as JSON with "chunk_id" (integer; 0-{max_index}) and "score" (number 0-10).\n'
+        "Return ONLY valid JSON:\n"
         '{"rankings": [{"chunk_id": 0, "score": 8.5}, {"chunk_id": 1, "score": 3.2}]}'
     )
 

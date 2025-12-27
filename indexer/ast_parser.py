@@ -206,68 +206,195 @@ def extract_chunks(code: str, lang: str, file_path: str) -> List[Dict]:
 
         # Language-specific node types to extract
         targets = {
-            "python": ["function_definition", "class_definition"],
+            "python": [
+                "function_definition",
+                "class_definition",
+                "decorated_definition",
+            ],
             "javascript": [
                 "function_declaration",
                 "class_declaration",
                 "method_definition",
+                "export_statement",
+                "lexical_declaration",
+                "variable_declaration",
+                "arrow_function",
             ],
             "typescript": [
                 "function_declaration",
                 "class_declaration",
                 "method_definition",
+                "export_statement",
+                "lexical_declaration",
+                "variable_declaration",
+                "interface_declaration",
+                "type_alias_declaration",
+                "enum_declaration",
+                "arrow_function",
             ],
-            "java": ["method_declaration", "class_declaration"],
-            "cpp": ["function_definition", "class_specifier"],
-            "c": ["function_definition"],
-            "go": ["function_declaration", "method_declaration"],
-            "rust": ["function_item", "impl_item"],
+            "java": [
+                "method_declaration",
+                "class_declaration",
+                "interface_declaration",
+            ],
+            "cpp": ["function_definition", "class_specifier", "struct_specifier"],
+            "c": ["function_definition", "struct_specifier"],
+            "go": ["function_declaration", "method_declaration", "type_declaration"],
+            "rust": [
+                "function_item",
+                "impl_item",
+                "struct_item",
+                "trait_item",
+                "enum_item",
+            ],
         }
 
         target_types = set(
             targets.get(lang, ["function_definition", "class_definition"])
         )
 
+        covered_ranges = []
+
         def traverse(node: Node):
             """Recursively traverse the tree to find target nodes."""
+            # Special handling for export statements in JS/TS
+            # export_statement wraps the actual declaration, so unwrap it
+            if node.type == "export_statement" and lang in ["javascript", "typescript"]:
+                # Look for the declaration inside the export
+                for child in node.children:
+                    if child.type in [
+                        "function_declaration",
+                        "class_declaration",
+                        "lexical_declaration",
+                        "variable_declaration",
+                    ]:
+                        # Process the actual declaration with the export's full range
+                        start_byte, end_byte = node.start_byte, node.end_byte
+                        chunk_text = code[start_byte:end_byte]
+
+                        if len(chunk_text.strip()) < 20:
+                            continue
+
+                        # Extract name from the child declaration
+                        function_name = extract_function_name(child, code, lang)
+                        docstring = extract_docstring(child, code, lang)
+
+                        start_line = node.start_point[0] + 1
+                        end_line = node.end_point[0] + 1
+
+                        chunks.append(
+                            {
+                                "text": chunk_text,
+                                "metadata": {
+                                    "file": file_path,
+                                    "start_line": start_line,
+                                    "end_line": end_line,
+                                    "type": child.type,
+                                    "level": "code_chunk",
+                                    "function_name": function_name,
+                                    "docstring": docstring,
+                                    "location": {
+                                        "file": file_path,
+                                        "start_line": start_line,
+                                        "end_line": end_line,
+                                    },
+                                },
+                            }
+                        )
+                        covered_ranges.append((start_line, end_line))
+                        return  # Don't traverse further
+
+                # If no declaration found, continue traversing
+                for child in node.children:
+                    traverse(child)
+                return
+
             if node.type in target_types:
                 start_byte, end_byte = node.start_byte, node.end_byte
                 chunk_text = code[start_byte:end_byte]
 
+                # Skip very small chunks (e.g. empty declarations)
+                if len(chunk_text.strip()) < 20:
+                    for child in node.children:
+                        traverse(child)
+                    return
+
                 function_name = extract_function_name(node, code, lang)
                 docstring = extract_docstring(node, code, lang)
+
+                start_line = node.start_point[0] + 1
+                end_line = node.end_point[0] + 1
 
                 chunks.append(
                     {
                         "text": chunk_text,
                         "metadata": {
                             "file": file_path,
-                            "start_line": node.start_point[0] + 1,
-                            "end_line": node.end_point[0] + 1,
+                            "start_line": start_line,
+                            "end_line": end_line,
                             "type": node.type,
                             "level": "code_chunk",
                             "function_name": function_name,
                             "docstring": docstring,
                             "location": {
                                 "file": file_path,
-                                "start_line": node.start_point[0] + 1,
-                                "end_line": node.end_point[0] + 1,
+                                "start_line": start_line,
+                                "end_line": end_line,
                             },
                         },
                     }
                 )
+                covered_ranges.append((start_line, end_line))
+                # Do not traverse children of a target node to avoid nested chunks
+                # (unless it's a class, where we might want methods - but current logic
+                # handles methods separately if they are targets)
+                if "class" not in node.type:
+                    return
 
             for child in node.children:
                 traverse(child)
 
         traverse(tree.root_node)
 
-        # Fallback: line windows if no chunks found
-        if not chunks:
-            lines = code.split("\n")
+        # Fill gaps with line windows
+        lines = code.split("\n")
+        total_lines = len(lines)
 
-            for i in range(0, len(lines), 30):  # 30-line windows
-                chunk_text = "\n".join(lines[i : i + 30])
+        # Sort and merge covered ranges
+        covered_ranges.sort()
+        merged_ranges = []
+        if covered_ranges:
+            curr_start, curr_end = covered_ranges[0]
+            for next_start, next_end in covered_ranges[1:]:
+                if next_start <= curr_end + 1:
+                    curr_end = max(curr_end, next_end)
+                else:
+                    merged_ranges.append((curr_start, curr_end))
+                    curr_start, curr_end = next_start, next_end
+            merged_ranges.append((curr_start, curr_end))
+
+        # Find gaps
+        gaps = []
+        last_end = 0
+        for start, end in merged_ranges:
+            if start > last_end + 1:
+                gaps.append((last_end + 1, start - 1))
+            last_end = end
+        if last_end < total_lines:
+            gaps.append((last_end + 1, total_lines))
+
+        # Add chunks for gaps
+        for gap_start, gap_end in gaps:
+            gap_size = gap_end - gap_start + 1
+            if gap_size <= 0:
+                continue
+
+            # For small gaps, just add one chunk
+            # For large gaps, split into windows
+            window_size = 50
+            for i in range(gap_start, gap_end + 1, window_size):
+                win_end = min(i + window_size - 1, gap_end)
+                chunk_text = "\n".join(lines[i - 1 : win_end])
 
                 if chunk_text.strip():
                     chunks.append(
@@ -275,16 +402,15 @@ def extract_chunks(code: str, lang: str, file_path: str) -> List[Dict]:
                             "text": chunk_text,
                             "metadata": {
                                 "file": file_path,
-                                "start_line": i + 1,  # Convert to 1-indexed
-                                "end_line": min(i + 30, len(lines))
-                                + 1,  # Convert to 1-indexed
-                                "type": "line_window",
+                                "start_line": i,
+                                "end_line": win_end,
+                                "type": "gap_window",
                                 "level": "code_chunk",
+                                "function_name": "top-level",
                                 "location": {
                                     "file": file_path,
-                                    "start_line": i + 1,  # Convert to 1-indexed
-                                    "end_line": min(i + 30, len(lines))
-                                    + 1,  # Convert to 1-indexed
+                                    "start_line": i,
+                                    "end_line": win_end,
                                 },
                             },
                         }

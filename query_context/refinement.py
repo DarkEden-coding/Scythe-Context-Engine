@@ -2,52 +2,97 @@
 
 from typing import Dict, List
 
-from config import SUMMARIZATION_MODEL, generate_text
+from config.config import SUMMARIZATION_MODEL, generate_text
+from indexer.chunk_storage import load_full_chunk
 from .rendering import _render_context_sections
 from .reranking import _score_chunks_with_model, _select_rerank_candidates
 
 
-def _build_refinement_prompt(query: str, top_chunks: List[Dict]) -> str:
+def _build_refinement_prompt(
+    query: str, top_chunks: List[Dict], index_prefix: str
+) -> str:
     """Build the refinement prompt for extracting essential context.
 
     Args:
         query: The original search query.
         top_chunks: List of top-scoring chunks for reference.
+        index_prefix: Path prefix for loading full chunk code.
 
     Returns:
         Formatted prompt string for LLM context refinement.
     """
 
-    chunk_references = []
+    chunk_details = []
     for i, chunk in enumerate(top_chunks):
         metadata = chunk["metadata"]
         level = metadata.get("level")
-        if level == "code_chunk":
-            ref = f"{{chunk{i}}}: {metadata['file']} lines {metadata.get('start_line', '?')}-{metadata.get('end_line', '?')}"
-        elif level == "file_summary":
-            ref = f"{{chunk{i}}}: File summary for {metadata['file']}"
-        elif level == "folder_summary":
-            ref = f"{{chunk{i}}}: Folder summary for {metadata.get('folder', '?')}"
-        elif level == "document":
-            ref = f"{{chunk{i}}}: Document {metadata['file']}"
-        else:
-            ref = f"{{chunk{i}}}: {chunk['text'][:50]}..."
-        chunk_references.append(ref)
 
-    available_chunks = "\n".join(chunk_references)
+        # Build chunk header
+        if level == "code_chunk":
+            header = f"[Chunk {i}] {metadata['file']} lines {metadata.get('start_line', '?')}-{metadata.get('end_line', '?')}"
+            func_name = metadata.get("function_name", "unknown")
+            if func_name != "unknown":
+                header += f" | Function: {func_name}"
+
+            # Load the actual code
+            chunk_id = metadata.get("chunk_id")
+            if chunk_id:
+                code = load_full_chunk(chunk_id, index_prefix)
+                # Truncate very long chunks to keep prompt manageable
+                if len(code) > 1500:
+                    code = code[:1500] + "\n... (truncated)"
+                chunk_details.append(f"{header}\n```\n{code}\n```")
+            else:
+                chunk_details.append(f"{header}\n(Code not available)")
+
+        elif level == "file_summary":
+            header = f"[Chunk {i}] File Summary: {metadata['file']}"
+            chunk_details.append(f"{header}\n{chunk['text']}")
+        elif level == "folder_summary":
+            header = f"[Chunk {i}] Folder: {metadata.get('folder', '?')}"
+            chunk_details.append(f"{header}\n{chunk['text']}")
+        elif level == "document":
+            header = f"[Chunk {i}] Document: {metadata['file']}"
+            chunk_id = metadata.get("chunk_id")
+            if chunk_id:
+                content = load_full_chunk(chunk_id, index_prefix)
+                if len(content) > 1500:
+                    content = content[:1500] + "\n... (truncated)"
+                chunk_details.append(f"{header}\n```\n{content}\n```")
+            else:
+                chunk_details.append(f"{header}\n{chunk['text'][:500]}")
+        else:
+            chunk_details.append(f"[Chunk {i}] {chunk['text'][:200]}...")
+
+    available_chunks = "\n\n---\n\n".join(chunk_details)
 
     return (
-        f'Extract ONLY the essential code/context needed for: "{query}"\n\n'
-        "Make sure to include:\n"
-        "- For every code snippet, include the exact file path and line numbers\n"
-        "- Include relevant file/folder summaries when helpful\n"
-        "- Call out key functions, classes, or patterns with their locations\n\n"
-        "IMPORTANT: Instead of copying code directly, reference chunks using placeholders like {chunk0}, {chunk1}, etc.\n"
-        "Each placeholder will be automatically replaced with the full code snippet and metadata.\n\n"
-        "Make sure to return output in markdown format.\n\n"
-        "Do not make any code change recommendations or suggestions, only provide context to a model down the line that will make the code changes.\n\n"
-        f"Available chunks:\n{available_chunks}\n\n"
-        "Essential context (concise):"
+        f'Create a comprehensive guide for: "{query}"\n\n'
+        "# CRITICAL RULES - FOLLOW EXACTLY:\n\n"
+        "1. **ANALYZE THE CODE PROVIDED**: You can see the actual implementation code below. Use it to understand:\n"
+        "   - How functions call each other\n"
+        "   - What imports/dependencies exist\n"
+        "   - The actual flow of data and control\n"
+        "   - How different files interact\n\n"
+        "2. **INCLUDE ALL RELEVANT CHUNKS**: Look for chunks from the same file or related files. If multiple chunks are related (e.g., they call each other or share imports), explain how they work together.\n\n"
+        "3. **ONLY USE PROVIDED CHUNKS**: You have access to exactly these chunks below. Do NOT invent, assume, or mention ANY functions, files, or patterns not explicitly shown in the code.\n\n"
+        "4. **NO ASSUMPTIONS**: Do NOT assume:\n"
+        "   - Architecture patterns unless explicitly shown in imports/code\n"
+        "   - Auth mechanisms beyond what you see in the actual code\n"
+        "   - State management patterns unless shown in imports/code\n"
+        "   - Storage mechanisms unless you see the actual API calls (cookies, localStorage, etc.)\n\n"
+        "5. **REFERENCE CHUNKS BY NUMBER**: Use {chunk0}, {chunk1}, etc. to reference code. Each chunk will be automatically expanded with its formatted code and metadata.\n\n"
+        "6. **STRUCTURE YOUR RESPONSE**:\n"
+        "   - Start with a brief overview of what these chunks show\n"
+        "   - Group chunks by file/functionality\n"
+        "   - For each chunk, use {chunkN} placeholder and explain:\n"
+        "     * What the code does\n"
+        "     * What it imports/depends on\n"
+        "     * How it relates to other chunks (look for function calls, shared imports)\n"
+        "   - Describe the flow between chunks if you can trace it from the code\n\n"
+        "7. **FORMAT**: Use markdown with clear sections. Be thorough and technical.\n\n"
+        f"## Code Chunks to Analyze:\n\n{available_chunks}\n\n"
+        "## Your Response (following all rules above):"
     )
 
 
@@ -92,7 +137,7 @@ def rerank_and_extract(
     scored_chunks = _score_chunks_with_model(rerank_chunks, query)
     scored_chunks.sort(reverse=True, key=lambda item: item[0])
     top_chunks = [chunk for _, chunk in scored_chunks[:top_k]]
-    refine_prompt = _build_refinement_prompt(query, top_chunks)
+    refine_prompt = _build_refinement_prompt(query, top_chunks, index_prefix)
 
     try:
         refined_text = generate_text(

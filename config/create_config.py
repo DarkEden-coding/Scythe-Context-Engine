@@ -36,10 +36,10 @@ DEFAULTS = {
     },
     "openrouter": {
         "api_base": "https://openrouter.ai/api/v1",
-        "chat_model": "openai/gpt-oss-20b",
+        "chat_model": "openai/gpt-oss-120b:exacto",
         "embedding_model": "openai/text-embedding-3-small",
-        "timeout_seconds": 60,
-        "chat_provider_whitelist": ["hyperbolic"],
+        "timeout_seconds": 15,
+        "chat_provider_whitelist": ["groq"],
         "embedding_provider_whitelist": ["openai"],
     },
     "ollama": {
@@ -129,8 +129,8 @@ def main():
             "embedding_model": ask("Embedding Model", p_def["embedding_model"], skip),
         }
 
-    Path("config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
-    print("\n✅ config.json created successfully!")
+    Path("config/config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
+    print("\n✅ config/config.json created successfully!")
 
 
 if __name__ == "__main__":
