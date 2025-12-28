@@ -19,64 +19,6 @@ This MCP server exposes a single tool called `query` that allows AI assistants t
 
 ### Setup with uv (Recommended)
 
-1. **Install dependencies:**
-   ```bash
-   uv pip install -e ..
-   ```
-
-2. **Verify installation:**
-   ```bash
-   uv run python server.py --help
-   ```
-
-### Setup with uv Virtual Environment
-
-1. **Create uv virtual environment:**
-   ```bash
-   uv venv
-   ```
-
-2. **Activate virtual environment:**
-   ```bash
-   source .venv/bin/activate  # On macOS/Linux
-   # OR
-   .venv\Scripts\activate     # On Windows
-   ```
-
-3. **Install dependencies:**
-   ```bash
-   uv pip install -e ..
-   ```
-
-4. **Verify installation:**
-   ```bash
-   python server.py --help
-   ```
-
-### Setup with Standard Python Virtual Environment
-
-1. **Create virtual environment:**
-   ```bash
-   python3 -m venv venv
-   ```
-
-2. **Activate virtual environment:**
-   ```bash
-   source venv/bin/activate  # On macOS/Linux
-   # OR
-   venv\Scripts\activate     # On Windows
-   ```
-
-3. **Install dependencies:**
-   ```bash
-   pip install -e ..
-   ```
-
-4. **Verify installation:**
-   ```bash
-   python server.py --help
-   ```
-
 ## Usage
 
 ### Running the Server
@@ -86,22 +28,6 @@ Start the MCP server:
 **With uv (recommended):**
 ```bash
 uv run python server.py
-```
-
-**With uv venv:**
-```bash
-source .venv/bin/activate  # On macOS/Linux
-# OR
-.venv\Scripts\activate     # On Windows
-python server.py
-```
-
-**With standard venv:**
-```bash
-source venv/bin/activate  # On macOS/Linux
-# OR
-venv\Scripts\activate     # On Windows
-python server.py
 ```
 
 The server will run and listen for MCP protocol messages.
@@ -118,153 +44,22 @@ The server will run and listen for MCP protocol messages.
    ```json
    {
      "mcpServers": {
-       "scythe-context": {
-         "command": "uv",
-         "args": ["run", "python", "/absolute/path/to/mcp_server/server.py"],
-         "cwd": "/absolute/path/to/Scythe-Context-Engine"
-       }
+       "ScytheContextEngine": {
+            "command": "uv",
+            "args": [
+                "run",
+                "--directory",
+                "/absolute/path/to/Scythe-Context-Engine",
+                "python",
+                "/absolute/path/to/Scythe-Context-Engine/mcp_server/server.py"
+            ]
+        }
      }
    }
    ```
-
-   **With uv venv:**
-   ```json
-   {
-     "mcpServers": {
-       "scythe-context": {
-         "command": "/absolute/path/to/Scythe-Context-Engine/.venv/bin/python",
-         "args": ["/absolute/path/to/mcp_server/server.py"],
-         "cwd": "/absolute/path/to/Scythe-Context-Engine"
-       }
-     }
-   }
-   ```
-
-   **With standard venv:**
-   ```json
-   {
-     "mcpServers": {
-       "scythe-context": {
-         "command": "/absolute/path/to/Scythe-Context-Engine/venv/bin/python",
-         "args": ["/absolute/path/to/mcp_server/server.py"],
-         "cwd": "/absolute/path/to/Scythe-Context-Engine"
-       }
-     }
-   }
-   ```
-
    Replace `/absolute/path/to` with the actual absolute paths to your Scythe Context Engine project.
 
 3. **Save and restart Cursor**
-
-### Using with VS Code
-
-1. **Install the MCP extension:**
-   - Install the "MCP (Model Context Protocol)" extension from the VS Code marketplace
-
-2. **Configure MCP settings:**
-   - Open VS Code settings (Cmd/Ctrl + ,)
-   - Search for "MCP"
-   - Add to your MCP configuration:
-
-   **With uv (recommended):**
-   ```json
-   {
-     "mcp": {
-       "servers": {
-         "scythe-context": {
-           "command": "uv",
-           "args": ["run", "python", "/absolute/path/to/mcp_server/server.py"],
-           "cwd": "/absolute/path/to/Scythe-Context-Engine"
-         }
-       }
-     }
-   }
-   ```
-
-   **With uv venv:**
-   ```json
-   {
-     "mcp": {
-       "servers": {
-         "scythe-context": {
-           "command": "/absolute/path/to/Scythe-Context-Engine/.venv/bin/python",
-           "args": ["/absolute/path/to/mcp_server/server.py"],
-           "cwd": "/absolute/path/to/Scythe-Context-Engine"
-         }
-       }
-     }
-   }
-   ```
-
-   **With standard venv:**
-   ```json
-   {
-     "mcp": {
-       "servers": {
-         "scythe-context": {
-           "command": "/absolute/path/to/Scythe-Context-Engine/venv/bin/python",
-           "args": ["/absolute/path/to/mcp_server/server.py"],
-           "cwd": "/absolute/path/to/Scythe-Context-Engine"
-         }
-       }
-     }
-   }
-   ```
-
-   Replace `/absolute/path/to` with the actual absolute paths.
-
-3. **Reload VS Code**
-
-### Using with Claude Desktop
-
-1. **Create/Edit Claude Desktop configuration:**
-   - Location: `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
-   - Location: `%APPDATA%\Claude\claude_desktop_config.json` (Windows)
-   - Location: `~/.config/Claude/claude_desktop_config.json` (Linux)
-
-2. **Add the server configuration:**
-
-   **With uv (recommended):**
-   ```json
-   {
-     "mcpServers": {
-       "scythe-context": {
-         "command": "uv",
-         "args": ["run", "python", "/absolute/path/to/mcp_server/server.py"],
-         "cwd": "/absolute/path/to/Scythe-Context-Engine"
-       }
-     }
-   }
-   ```
-
-   **With uv venv:**
-   ```json
-   {
-     "mcpServers": {
-       "scythe-context": {
-         "command": "/absolute/path/to/Scythe-Context-Engine/.venv/bin/python",
-         "args": ["/absolute/path/to/mcp_server/server.py"],
-         "cwd": "/absolute/path/to/Scythe-Context-Engine"
-       }
-     }
-   }
-   ```
-
-   **With standard venv:**
-   ```json
-   {
-     "mcpServers": {
-       "scythe-context": {
-         "command": "/absolute/path/to/Scythe-Context-Engine/venv/bin/python",
-         "args": ["/absolute/path/to/mcp_server/server.py"],
-         "cwd": "/absolute/path/to/Scythe-Context-Engine"
-       }
-     }
-   }
-   ```
-
-3. **Restart Claude Desktop**
 
 ## The Query Tool
 
