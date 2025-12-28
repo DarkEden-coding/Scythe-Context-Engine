@@ -5,6 +5,7 @@ OpenRouter API client utilities.
 from typing import Any, Dict, List, Optional, Sequence
 
 import requests
+from requests.adapters import HTTPAdapter
 
 
 class OpenRouterError(Exception):
@@ -20,6 +21,7 @@ class OpenRouterClient:
         api_base: str = "https://openrouter.ai/api/v1",
         timeout_seconds: float = 60.0,
         session: Optional[requests.Session] = None,
+        pool_size: int = 100,
     ) -> None:
         """Initialize the client.
 
@@ -28,13 +30,26 @@ class OpenRouterClient:
             api_base: Base URL for the OpenRouter API.
             timeout_seconds: Request timeout in seconds.
             session: Optional requests session for reuse.
+            pool_size: Connection pool size for concurrent requests.
         """
         self.api_key = api_key
         self.api_base = api_base.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self.session = session or requests.Session()
 
-    def embed_texts(self, texts: Sequence[str], model: str, options: Optional[Dict[str, Any]] = None) -> List[List[float]]:
+        if session:
+            self.session = session
+        else:
+            self.session = requests.Session()
+            adapter = HTTPAdapter(
+                pool_connections=pool_size,
+                pool_maxsize=pool_size,
+            )
+            self.session.mount("https://", adapter)
+            self.session.mount("http://", adapter)
+
+    def embed_texts(
+        self, texts: Sequence[str], model: str, options: Optional[Dict[str, Any]] = None
+    ) -> List[List[float]]:
         """Generate embeddings for multiple texts.
 
         Args:
