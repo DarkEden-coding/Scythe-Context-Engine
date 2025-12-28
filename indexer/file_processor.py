@@ -223,7 +223,10 @@ def _generate_file_summary(code: str, rel_path: str) -> tuple:
 
 @profile
 def process_files(
-    files_to_process: List[Path], repo_path: str, output_prefix: Optional[str] = None
+    files_to_process: List[Path],
+    repo_path: str,
+    output_prefix: Optional[str] = None,
+    quiet: bool = False,
 ) -> tuple:
     """Process files to extract chunks and file summaries using multithreading.
 
@@ -231,6 +234,7 @@ def process_files(
         files_to_process: List of file paths to process.
         repo_path: Root path of the repository.
         output_prefix: Directory prefix for output files (for saving full chunks).
+        quiet: If True, suppress progress bars.
 
     Returns:
         Tuple containing (chunks, file_summaries) where chunks is a list of all extracted chunks
@@ -271,11 +275,15 @@ def process_files(
             for file_path in files_to_process
         ]
 
-        # Use tqdm to track progress
-        for future in tqdm(
-            as_completed(futures), total=len(futures), desc="Extracting chunks"
-        ):
-            collect_results(future)
+        # Use tqdm to track progress (unless quiet mode)
+        if quiet:
+            for future in as_completed(futures):
+                collect_results(future)
+        else:
+            for future in tqdm(
+                as_completed(futures), total=len(futures), desc="Extracting chunks"
+            ):
+                collect_results(future)
 
     # Print any errors that occurred
     for error in errors:
@@ -286,13 +294,14 @@ def process_files(
 
 @profile
 def generate_folder_summaries(
-    file_summaries: Dict[str, str], chunks: List[Dict]
+    file_summaries: Dict[str, str], chunks: List[Dict], quiet: bool = False
 ) -> List[Dict]:
     """Generate folder summaries and add to chunks using multithreading.
 
     Args:
         file_summaries: Dictionary mapping file paths to their summaries.
         chunks: List of existing chunks to append folder summaries to.
+        quiet: If True, suppress progress bars.
 
     Returns:
         Updated chunks list with folder summary chunks added.
@@ -341,12 +350,16 @@ def generate_folder_summaries(
             for folder_data in folders_to_process
         ]
 
-        # Use tqdm to track progress
-        for future in tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc="Generating folder summaries",
-        ):
-            collect_folder_result(future)
+        # Use tqdm to track progress (unless quiet mode)
+        if quiet:
+            for future in as_completed(futures):
+                collect_folder_result(future)
+        else:
+            for future in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Generating folder summaries",
+            ):
+                collect_folder_result(future)
 
     return chunks

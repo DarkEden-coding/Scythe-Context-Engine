@@ -74,11 +74,12 @@ def collect_successful_chunks_and_embeddings(
     return chunks, embeddings
 
 
-def create_faiss_index(chunks: List[Dict]) -> tuple:
+def create_faiss_index(chunks: List[Dict], quiet: bool = False) -> tuple:
     """Create FAISS index from embedded chunks using multithreading.
 
     Args:
         chunks: List of chunk dictionaries to embed and index.
+        quiet: If True, suppress progress bars.
 
     Returns:
         Tuple containing (faiss_index, embedding_dimension).
@@ -117,11 +118,15 @@ def create_faiss_index(chunks: List[Dict]) -> tuple:
                 for batch_idx, batch_texts in batches
             ]
 
-            # Use tqdm to track progress
-            for future in tqdm(
-                as_completed(futures), total=len(futures), desc="Embedding"
-            ):
-                collect_embedding_result(future)
+            # Use tqdm to track progress (unless quiet mode)
+            if quiet:
+                for future in as_completed(futures):
+                    collect_embedding_result(future)
+            else:
+                for future in tqdm(
+                    as_completed(futures), total=len(futures), desc="Embedding"
+                ):
+                    collect_embedding_result(future)
 
         # Assign new embeddings to chunks
         for i, chunk in enumerate(chunks_to_embed):
