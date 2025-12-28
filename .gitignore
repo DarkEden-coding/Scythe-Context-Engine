@@ -2,3 +2,8 @@
 config.json
 .venv
 .env
+uv.lock
+indexes/
+__pycache__/
+*.db
+*.pyc

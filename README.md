@@ -39,7 +39,7 @@ Scythe Context Engine indexes code repositories by extracting functions, classes
 ## Installation
 
 ```bash
-uv pip install -r requirements.txt
+uv pip install -e .
 ```
 
 ## Usage
