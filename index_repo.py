@@ -35,7 +35,7 @@ def index_repo(
         quiet: If True, suppress progress bars and reduce output verbosity.
     """
 
-    print(f"📁 Indexing {repo_path}...")
+    print(f"Indexing {repo_path}...")
     repo_path_obj = Path(repo_path)
     output_path = Path(output_prefix)
 
@@ -44,7 +44,7 @@ def index_repo(
     old_hashes = {}
     if (output_path / "chunks.pkl").exists() and (output_path / "meta.json").exists():
         if not quiet:
-            print("🔄 Loading existing index for incremental update...")
+            print("Loading existing index for incremental update...")
         try:
             with open(output_path / "chunks.pkl", "rb") as f:
                 old_chunks = pickle.load(f)
@@ -54,7 +54,7 @@ def index_repo(
         except Exception as e:
             if not quiet:
                 print(
-                    f"⚠️ Could not load existing index: {e}. Performing full re-index."
+                    f"Could not load existing index: {e}. Performing full re-index."
                 )
             old_chunks = []
             old_hashes = {}
@@ -79,7 +79,7 @@ def index_repo(
     files_to_process = added_files + modified_files
 
     # 3. Show overview and get confirmation
-    print("\n📂 Repository Overview:")
+    print("\nRepository Overview:")
     print("=" * 50)
     if not old_hashes:
         print(f"  Total files to index: {len(all_files)}")
@@ -91,7 +91,7 @@ def index_repo(
     print("=" * 50)
 
     if not files_to_process and not deleted_files:
-        print("✅ Index is already up to date. No changes detected.")
+        print("Index is already up to date. No changes detected.")
         return
 
     if not auto_confirm:
@@ -101,7 +101,7 @@ def index_repo(
             return
     else:
         if not quiet:
-            print("\n🚀 Auto-confirming indexing...")
+            print("\nAuto-confirming indexing...")
 
     # 4. Filter old chunks (keep only those from unchanged files)
     # We remove both code chunks and file summaries for modified/deleted files
@@ -125,7 +125,7 @@ def index_repo(
         if quiet:
             print("Indexing...")
         else:
-            print(f"📄 Processing {len(files_to_process)} changed/new files...")
+            print(f"Processing {len(files_to_process)} changed/new files...")
         new_chunks, file_summaries = process_files(
             files_to_process, repo_path, output_prefix, quiet=quiet
         )
@@ -149,26 +149,26 @@ def index_repo(
     if quiet:
         print("Summarizing...")
     else:
-        print("📂 Generating folder summaries...")
+        print("Generating folder summaries...")
     final_chunks = generate_folder_summaries(
         all_file_summaries, combined_chunks, quiet=quiet
     )
 
     if not quiet:
-        print(f"✅ Total chunks: {len(final_chunks)} ({len(new_chunks)} new/updated)")
+        print(f"Total chunks: {len(final_chunks)} ({len(new_chunks)} new/updated)")
 
     # 7. Create FAISS index
     if quiet:
         print("Embedding...")
     else:
-        print("🔢 Embedding chunks...")
+        print("Embedding chunks...")
     index, embedding_dim, indexed_chunks = create_faiss_index(final_chunks, quiet=quiet)
 
     # 8. Save index and update metadata with hashes
     if quiet:
         print("Saving...")
     else:
-        print("💾 Saving index...")
+        print("Saving index...")
     save_index(index, indexed_chunks, repo_path, output_prefix, embedding_dim)
 
     # Update meta.json with file hashes
@@ -182,7 +182,7 @@ def index_repo(
     if quiet:
         print("Indexed.")
     else:
-        print(f"✅ Index updated in {output_prefix}/ ({len(indexed_chunks)} chunks)")
+        print(f"Index updated in {output_prefix}/ ({len(indexed_chunks)} chunks)")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,57 @@
 import hashlib
 import sys
+import io
 from pathlib import Path
+
+# Force UTF-8 encoding for stdout/stderr to handle Unicode characters
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+except Exception:
+    pass
+
+# Also wrap stdout/stderr to handle encoding errors and strip non-ASCII
+class Utf8Wrapper:
+    def __init__(self, stream):
+        self.stream = stream
+
+    def write(self, text):
+        if isinstance(text, str):
+            try:
+                # Strip non-ASCII characters before writing
+                safe_text = ''.join(char for char in text if ord(char) < 128)
+                self.stream.write(safe_text)
+            except (UnicodeEncodeError, Exception):
+                # If that fails, try to replace problematic characters
+                try:
+                    safe_text = text.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
+                    safe_text = ''.join(char for char in safe_text if ord(char) < 128)
+                    self.stream.write(safe_text)
+                except Exception:
+                    # Last resort: write empty string
+                    pass
+        else:
+            try:
+                self.stream.write(str(text))
+            except Exception:
+                pass
+
+    def flush(self):
+        try:
+            self.stream.flush()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+# Wrap stdout and stderr
+if not isinstance(sys.stdout, Utf8Wrapper):
+    sys.stdout = Utf8Wrapper(sys.stdout)
+if not isinstance(sys.stderr, Utf8Wrapper):
+    sys.stderr = Utf8Wrapper(sys.stderr)
 
 # Add project root to sys.path to allow imports from indexer and query_context
 project_root = str(Path(__file__).parent.parent.absolute())
@@ -27,9 +78,40 @@ def get_project_identifier(project_path: str) -> str:
     # Use SHA256 hash of the absolute path to create a unique identifier
     return hashlib.sha256(project_path.encode()).hexdigest()[:16]
 
+def _strip_non_ascii(text: str) -> str:
+    """Remove all non-ASCII characters from a string.
+
+    Args:
+        text: The string to clean.
+
+    Returns:
+        String with only ASCII characters preserved.
+    """
+    if not isinstance(text, str):
+        return str(text)
+    return ''.join(char for char in text if ord(char) < 128)
+
+
+def _truncate_to_word_limit(text: str, word_limit: int) -> tuple:
+    """Truncate text to a maximum word count.
+
+    Args:
+        text: The text to truncate.
+        word_limit: Maximum number of words to keep.
+
+    Returns:
+        A tuple of (truncated_text, was_truncated)
+    """
+    words = text.split()
+    if len(words) <= word_limit:
+        return text, False
+
+    truncated = ' '.join(words[:word_limit])
+    return truncated, True
+
 
 @mcp.tool()
-def query(query_text: str, project_location: str) -> str:
+def query(query_text: str, project_location: str, word_limit: int = 5000) -> str:
     """
     Search the project for relevant code context.
     This tool will automatically index the project (incremental) before searching.
@@ -37,8 +119,13 @@ def query(query_text: str, project_location: str) -> str:
     Args:
         query_text: The search query or question about the codebase. Make it targeted and specific. ex: "Frontend user authentication" And target semantic matching, ie not "show me the code for user authentication" instead just be "user authentication frontend and backend"
         project_location: The absolute path to the project root directory on the local machine.
+        word_limit: Maximum word count for the output (default 5000 words, approximately 5k tokens). Results exceeding this limit will be truncated.
     """
     try:
+        # Strip non-ASCII characters from inputs
+        query_text = _strip_non_ascii(query_text)
+        project_location = _strip_non_ascii(project_location)
+
         # 1. Determine index path (store in context engine's indexes folder)
         project_path = Path(project_location).absolute()
         project_id = get_project_identifier(str(project_path))
@@ -48,26 +135,56 @@ def query(query_text: str, project_location: str) -> str:
         # Ensure the index directory exists
         index_path.mkdir(parents=True, exist_ok=True)
 
-        # 2. Run incremental indexing
-        # index_repo(repo_path, output_prefix, auto_confirm=True)
-        # Note: index_repo prints to stdout, we might want to capture it or just let it flow
-        print(f"Indexing {project_path} into {index_path}...")
-        index_repo(str(project_path), str(index_path), auto_confirm=True, quiet=True)
+        # 2. Run incremental indexing with output redirection to suppress encoding errors
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        try:
+            # Redirect to StringIO with ASCII-safe wrapper
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            index_repo(str(project_path), str(index_path), auto_confirm=True, quiet=True)
+        except Exception:
+            # Silently handle any errors during indexing
+            pass
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
 
-        # 3. Perform the query
-        # query_context(query, index_prefix, top_k=20, output_k=5, no_cache=False)
-        print(f"Querying: {query_text}")
-        result = query_context(
-            query=query_text,
-            index_prefix=str(index_path),
-            top_k=20,
-            output_k=10,
-            no_cache=False,
-        )
+        # 3. Perform the query with output redirection and Unicode error handling
+        try:
+            sys.stdout = io.StringIO()
+            sys.stderr = io.StringIO()
+            result = query_context(
+                query=query_text,
+                index_prefix=str(index_path),
+                top_k=20,
+                output_k=10,
+                no_cache=False,
+                word_limit=word_limit,
+            )
+        except UnicodeEncodeError as ue:
+            # Handle encoding errors by returning stripped result or error message
+            return f"Query completed but encountered encoding issues while processing: {_strip_non_ascii(str(ue))}"
+        except Exception as ex:
+            # Handle other exceptions
+            return f"Query failed: {_strip_non_ascii(str(ex))}"
+        finally:
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
 
-        return result
+        # Strip non-ASCII characters from result before returning
+        cleaned_result = _strip_non_ascii(result)
+
+        # Apply word limit truncation
+        truncated_result, was_truncated = _truncate_to_word_limit(cleaned_result, word_limit)
+
+        if was_truncated:
+            truncated_result += f"\n\n[Result truncated: output exceeded {word_limit} word limit]"
+
+        return truncated_result
     except Exception as e:
-        return f"Error during query: {str(e)}"
+        error_msg = _strip_non_ascii(str(e))
+        return f"Error during query: {error_msg}"
 
 
 if __name__ == "__main__":

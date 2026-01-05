@@ -17,6 +17,7 @@ def query_context(
     top_k: int = 20,
     output_k: int = 5,
     no_cache: bool = False,
+    word_limit: int = 5000,
 ):
     """Main query pipeline for retrieving context from indexed repository.
 
@@ -26,30 +27,48 @@ def query_context(
         top_k: Number of top chunks to retrieve initially.
         output_k: Number of chunks to include in final output.
         no_cache: If True, skip semantic caching.
+        word_limit: Maximum word count for the final output.
 
     Returns:
         Refined context string containing relevant code and information.
     """
 
-    print(f"🔍 Query: {query}")
+    print(f"Query: {query}")
 
     # Load index
 
-    print("📂 Loading index...")
+    print("Loading index...")
 
     index = faiss.read_index(f"{index_prefix}/index.faiss")
 
     with open(f"{index_prefix}/chunks.pkl", "rb") as f:
         chunks = pickle.load(f)
 
+    # Strip non-ASCII characters from all chunks to prevent encoding issues
+    def strip_non_ascii(text):
+        if isinstance(text, str):
+            return ''.join(char for char in text if ord(char) < 128)
+        return text
+
+    for chunk in chunks:
+        if isinstance(chunk, dict):
+            # Strip from text
+            if 'text' in chunk:
+                chunk['text'] = strip_non_ascii(chunk['text'])
+            # Strip from metadata fields
+            if 'metadata' in chunk and isinstance(chunk['metadata'], dict):
+                for key, value in chunk['metadata'].items():
+                    if isinstance(value, str):
+                        chunk['metadata'][key] = strip_non_ascii(value)
+
     with open(f"{index_prefix}/meta.json", "r") as f:
         meta = json.load(f)
 
-    print(f"📊 Index: {meta['total_chunks']} chunks")
+    print(f"Index: {meta['total_chunks']} chunks")
 
     # Embed query
 
-    print("🔢 Embedding query...")
+    print("Embedding query...")
 
     query_emb = embed_single(query, model=EMBEDDING_MODEL)
 
@@ -62,7 +81,7 @@ def query_context(
 
     # Search
 
-    print(f"🎯 Searching (top-{top_k})...")
+    print(f"Searching (top-{top_k})...")
 
     scores, indices = index.search(query_emb, top_k)
 
@@ -76,7 +95,7 @@ def query_context(
             chunk["score"] = float(scores[0][i])
             results.append(chunk)
 
-    print(f"✅ Found {len(results)} relevant chunks")
+    print(f"Found {len(results)} relevant chunks")
 
     if not results:
         return "No relevant context found."
@@ -90,9 +109,9 @@ def query_context(
 
     # Rerank + extract
 
-    print("🤖 Reranking with LLM...")
+    print("Reranking with LLM...")
 
-    refined = rerank_and_extract(results, query, index_prefix, output_k)
+    refined = rerank_and_extract(results, query, index_prefix, output_k, word_limit)
 
     # Cache result
 

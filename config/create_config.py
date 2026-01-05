@@ -130,7 +130,7 @@ def main():
         }
 
     Path("config/config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
-    print("\n✅ config/config.json created successfully!")
+    print("\nconfig/config.json created successfully!")
 
 
 if __name__ == "__main__":

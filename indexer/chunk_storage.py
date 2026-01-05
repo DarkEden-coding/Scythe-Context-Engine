@@ -52,7 +52,7 @@ def load_full_chunk(chunk_id: str, index_prefix: str) -> str:
         index_prefix: Directory prefix where the index is stored.
 
     Returns:
-        The complete source code of the chunk.
+        The complete source code of the chunk with non-ASCII characters stripped.
     """
     full_chunks_dir = Path(index_prefix) / "full_chunks"
 
@@ -63,7 +63,9 @@ def load_full_chunk(chunk_id: str, index_prefix: str) -> str:
         chunk_file = full_chunks_dir / f"{chunk_id}{extension}"
         if chunk_file.exists():
             with open(chunk_file, "r", encoding="utf-8") as f:
-                return f.read()
+                content = f.read()
+                # Strip non-ASCII characters to prevent encoding issues
+                return ''.join(char for char in content if ord(char) < 128)
 
     return f"[Chunk {chunk_id} not found]"
 

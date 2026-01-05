@@ -27,7 +27,7 @@ def check_cache(query: str, top_chunks: List[Dict]) -> Optional[str]:
         cached = cache.get(f"context_cache:{cache_key}")
 
         if cached:
-            print("💾 Cache HIT")
+            print("Cache HIT")
 
             return cached
 
