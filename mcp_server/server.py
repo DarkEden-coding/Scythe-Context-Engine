@@ -114,7 +114,7 @@ def _truncate_to_token_limit(text: str, token_limit: int) -> tuple:
 
 
 @mcp.tool()
-def query(query_text: str, project_location: str, token_limit: int = 5000) -> str:
+def query(query_text: str, project_location: str, token_limit: int = 15000) -> str:
     """
     Search the project for relevant code context.
     This tool will automatically index the project (incremental) before searching.

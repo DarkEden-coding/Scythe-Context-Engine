@@ -1,4 +1,4 @@
-"""Main query functionality for retrieving context from indexed repository."""
+l"""Main query functionality for retrieving context from indexed repository."""
 
 import json
 import pickle
@@ -17,7 +17,7 @@ def query_context(
     top_k: int = 20,
     output_k: int = 5,
     no_cache: bool = False,
-    token_limit: int = 5000,
+    token_limit: int = 15000,
 ):
     """Main query pipeline for retrieving context from indexed repository.
 

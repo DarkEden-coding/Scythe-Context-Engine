@@ -23,7 +23,7 @@ def _count_tokens(text: str) -> int:
 
 
 def _build_refinement_prompt(
-    query: str, top_chunks: List[Dict], index_prefix: str, token_limit: int = 5000
+    query: str, top_chunks: List[Dict], index_prefix: str, token_limit: int = 15000
 ) -> str:
     """Build the refinement prompt for extracting essential context.
 
@@ -110,7 +110,7 @@ def _build_refinement_prompt(
 
 
 def rerank_and_extract(
-    chunks: List[Dict], query: str, index_prefix: str, top_k: int = 5, token_limit: int = 4000
+    chunks: List[Dict], query: str, index_prefix: str, top_k: int = 5, token_limit: int = 15000
 ) -> str:
     """Use LLM to rerank chunks and extract exact context.
 
@@ -129,6 +129,8 @@ def rerank_and_extract(
     scored_chunks = _score_chunks_with_model(rerank_chunks, query)
     scored_chunks.sort(reverse=True, key=lambda item: item[0])
     top_chunks = [chunk for _, chunk in scored_chunks[:top_k]]
+    if not top_chunks:
+        return "query invalid, no related chunks found\nTry with a different query. Or search for context yourself"
     refine_prompt = _build_refinement_prompt(query, top_chunks, index_prefix, token_limit)
 
     try:
