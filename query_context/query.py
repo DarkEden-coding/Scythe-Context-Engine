@@ -17,7 +17,7 @@ def query_context(
     top_k: int = 20,
     output_k: int = 5,
     no_cache: bool = False,
-    word_limit: int = 5000,
+    token_limit: int = 5000,
 ):
     """Main query pipeline for retrieving context from indexed repository.
 
@@ -27,7 +27,7 @@ def query_context(
         top_k: Number of top chunks to retrieve initially.
         output_k: Number of chunks to include in final output.
         no_cache: If True, skip semantic caching.
-        word_limit: Maximum word count for the final output.
+        token_limit: Maximum token count for the final output.
 
     Returns:
         Refined context string containing relevant code and information.
@@ -111,7 +111,7 @@ def query_context(
 
     print("Reranking with LLM...")
 
-    refined = rerank_and_extract(results, query, index_prefix, output_k, word_limit)
+    refined = rerank_and_extract(results, query, index_prefix, output_k, token_limit=token_limit)
 
     # Cache result
 

@@ -2,6 +2,7 @@ import hashlib
 import sys
 import io
 from pathlib import Path
+import tiktoken
 
 # Force UTF-8 encoding for stdout/stderr to handle Unicode characters
 try:
@@ -92,26 +93,28 @@ def _strip_non_ascii(text: str) -> str:
     return ''.join(char for char in text if ord(char) < 128)
 
 
-def _truncate_to_word_limit(text: str, word_limit: int) -> tuple:
-    """Truncate text to a maximum word count.
+def _truncate_to_token_limit(text: str, token_limit: int) -> tuple:
+    """Truncate text to a maximum token count using tiktoken.
 
     Args:
         text: The text to truncate.
-        word_limit: Maximum number of words to keep.
+        token_limit: Maximum number of tokens to keep.
 
     Returns:
         A tuple of (truncated_text, was_truncated)
     """
-    words = text.split()
-    if len(words) <= word_limit:
+    encoding = tiktoken.get_encoding("cl100k_base")
+    tokens = encoding.encode(text)
+    if len(tokens) <= token_limit:
         return text, False
 
-    truncated = ' '.join(words[:word_limit])
-    return truncated, True
+    truncated_tokens = tokens[:token_limit]
+    truncated_text = encoding.decode(truncated_tokens)
+    return truncated_text, True
 
 
 @mcp.tool()
-def query(query_text: str, project_location: str, word_limit: int = 5000) -> str:
+def query(query_text: str, project_location: str, token_limit: int = 5000) -> str:
     """
     Search the project for relevant code context.
     This tool will automatically index the project (incremental) before searching.
@@ -119,7 +122,7 @@ def query(query_text: str, project_location: str, word_limit: int = 5000) -> str
     Args:
         query_text: The search query or question about the codebase. Make it targeted and specific. ex: "Frontend user authentication" And target semantic matching, ie not "show me the code for user authentication" instead just be "user authentication frontend and backend"
         project_location: The absolute path to the project root directory on the local machine.
-        word_limit: Maximum word count for the output (default 5000 words, approximately 5k tokens). Results exceeding this limit will be truncated.
+        token_limit: Maximum token count for the output (default 5000 tokens). Results exceeding this limit will be truncated.
     """
     try:
         # Strip non-ASCII characters from inputs
@@ -160,7 +163,7 @@ def query(query_text: str, project_location: str, word_limit: int = 5000) -> str
                 top_k=20,
                 output_k=10,
                 no_cache=False,
-                word_limit=word_limit,
+                token_limit=token_limit,
             )
         except UnicodeEncodeError as ue:
             # Handle encoding errors by returning stripped result or error message
@@ -175,12 +178,11 @@ def query(query_text: str, project_location: str, word_limit: int = 5000) -> str
         # Strip non-ASCII characters from result before returning
         cleaned_result = _strip_non_ascii(result)
 
-        # Apply word limit truncation
-        truncated_result, was_truncated = _truncate_to_word_limit(cleaned_result, word_limit)
+        # Apply token limit truncation
+        truncated_result, was_truncated = _truncate_to_token_limit(cleaned_result, token_limit)
 
         if was_truncated:
-            truncated_result += f"\n\n[Result truncated: output exceeded {word_limit} word limit]"
-
+            truncated_result += f"\n\n[Result truncated: output exceeded {token_limit} token limit]"
         return truncated_result
     except Exception as e:
         error_msg = _strip_non_ascii(str(e))

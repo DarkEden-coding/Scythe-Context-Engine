@@ -1,5 +1,6 @@
 """Refinement functionality for query context."""
 
+import tiktoken
 from typing import Dict, List
 
 from config.config import SUMMARIZATION_MODEL, generate_text
@@ -8,20 +9,21 @@ from .rendering import _render_context_sections
 from .reranking import _score_chunks_with_model, _select_rerank_candidates
 
 
-def _count_words(text: str) -> int:
-    """Count words in a text string.
+def _count_tokens(text: str) -> int:
+    """Count tokens in a text string using tiktoken.
 
     Args:
-        text: The text to count words in.
+        text: The text to count tokens in.
 
     Returns:
-        Number of words in the text.
+        Number of tokens in the text.
     """
-    return len(text.split())
+    encoding = tiktoken.get_encoding("cl100k_base")
+    return len(encoding.encode(text))
 
 
 def _build_refinement_prompt(
-    query: str, top_chunks: List[Dict], index_prefix: str, word_limit: int = 5000
+    query: str, top_chunks: List[Dict], index_prefix: str, token_limit: int = 5000
 ) -> str:
     """Build the refinement prompt for extracting essential context.
 
@@ -35,8 +37,8 @@ def _build_refinement_prompt(
         Formatted prompt string for LLM context refinement.
     """
 
-    max_chunk_words = word_limit - 1000
-    current_word_count = 0
+    max_chunk_tokens = token_limit - 1000
+    current_token_count = 0
     chunk_details = []
 
     for i, chunk in enumerate(top_chunks):
@@ -82,70 +84,33 @@ def _build_refinement_prompt(
             chunk_content = f"[Chunk {i}] {chunk['text'][:200]}..."
 
         # Check if adding this chunk would exceed the limit
-        chunk_words = _count_words(chunk_content)
-        if current_word_count + chunk_words > max_chunk_words:
+        chunk_tokens = _count_tokens(chunk_content)
+        if current_token_count + chunk_tokens > max_chunk_tokens:
             break
 
         chunk_details.append(chunk_content)
-        current_word_count += chunk_words
+        current_token_count += chunk_tokens
 
     available_chunks = "\n\n---\n\n".join(chunk_details)
 
     return (
-        f'Create a comprehensive guide for: "{query}"\n\n'
-        f"# OUTPUT LIMIT: Your response MUST NOT exceed {word_limit} words. Be concise and focused.\n\n"
-        "# CRITICAL RULES - FOLLOW EXACTLY:\n\n"
-        "1. **ANALYZE THE CODE PROVIDED**: You can see the actual implementation code below. Use it to understand:\n"
-        "   - How functions call each other\n"
-        "   - What imports/dependencies exist\n"
-        "   - The actual flow of data and control\n"
-        "   - How different files interact\n\n"
-        "2. **INCLUDE ALL RELEVANT CHUNKS**: Look for chunks from the same file or related files. If multiple chunks are related (e.g., they call each other or share imports), explain how they work together.\n\n"
-        "3. **ONLY USE PROVIDED CHUNKS**: You have access to exactly these chunks below. Do NOT invent, assume, or mention ANY functions, files, or patterns not explicitly shown in the code.\n\n"
-        "4. **NO ASSUMPTIONS**: Do NOT assume:\n"
-        "   - Architecture patterns unless explicitly shown in imports/code\n"
-        "   - Auth mechanisms beyond what you see in the actual code\n"
-        "   - State management patterns unless shown in imports/code\n"
-        "   - Storage mechanisms unless you see the actual API calls (cookies, localStorage, etc.)\n\n"
-        "5. **REFERENCE CHUNKS BY NUMBER**: Use {chunk0}, {chunk1}, etc. to reference code. Each chunk will be automatically expanded with its formatted code and metadata.\n\n"
-        "6. **STRUCTURE YOUR RESPONSE**:\n"
-        "   - Start with a brief overview of what these chunks show\n"
-        "   - Group chunks by file/functionality\n"
-        "   - For each chunk, use {chunkN} placeholder and explain:\n"
-        "     * What the code does\n"
-        "     * What it imports/depends on\n"
-        "     * How it relates to other chunks (look for function calls, shared imports)\n"
-        "   - Describe the flow between chunks if you can trace it from the code\n\n"
-        f"7. **FORMAT**: Use markdown with clear sections. Be thorough and technical but stay within the {word_limit} word limit.\n\n"
+        f'Provide a summary for: "{query}"\n\n'
+        "First, write one paragraph about the overall structure of the provided code chunks and what a next LLM would need to know to understand or continue working with this code.\n\n"
+        "Then, for each code chunk, provide a small description of what that chunk is (1-2 sentences).\n\n"
+        "Format your response exactly as:\n"
+        "Overall Summary:\n[paragraph]\n\n"
+        "Chunk Descriptions:\n"
+        "Chunk 0: [description]\n"
+        "Chunk 1: [description]\n"
+        "...\n\n"
+        "Do not include any actual code in your response.\n\n"
         f"## Code Chunks to Analyze:\n\n{available_chunks}\n\n"
-        "## Your Response (following all rules above):"
+        "Your Response:"
     )
 
 
-def _replace_chunk_placeholders(
-    response: str, top_chunks: List[Dict], index_prefix: str
-) -> str:
-    """Replace {chunk0}, {chunk1}, etc. placeholders with actual chunk content.
-
-    Args:
-        response: LLM response containing placeholder references.
-        top_chunks: List of top-scoring chunks for replacement.
-        index_prefix: Path prefix for the FAISS index files (needed to load full code).
-
-    Returns:
-        Response string with placeholders replaced by formatted chunk content.
-    """
-    result = response
-    for i, chunk in enumerate(top_chunks):
-        placeholder = f"{{chunk{i}}}"
-        if placeholder in result:
-            formatted_chunk = _render_context_sections([chunk], index_prefix)
-            result = result.replace(placeholder, formatted_chunk.strip())
-    return result
-
-
 def rerank_and_extract(
-    chunks: List[Dict], query: str, index_prefix: str, top_k: int = 5, word_limit: int = 5000
+    chunks: List[Dict], query: str, index_prefix: str, top_k: int = 5, token_limit: int = 4000
 ) -> str:
     """Use LLM to rerank chunks and extract exact context.
 
@@ -164,7 +129,7 @@ def rerank_and_extract(
     scored_chunks = _score_chunks_with_model(rerank_chunks, query)
     scored_chunks.sort(reverse=True, key=lambda item: item[0])
     top_chunks = [chunk for _, chunk in scored_chunks[:top_k]]
-    refine_prompt = _build_refinement_prompt(query, top_chunks, index_prefix, word_limit)
+    refine_prompt = _build_refinement_prompt(query, top_chunks, index_prefix, token_limit)
 
     try:
         refined_text = generate_text(
@@ -172,10 +137,22 @@ def rerank_and_extract(
             model=SUMMARIZATION_MODEL,
             options={"temperature": 0.2},
         )
-        final_text = _replace_chunk_placeholders(
-            refined_text.strip(), top_chunks, index_prefix
-        )
-        return final_text
+        rendered_chunks = _render_context_sections(top_chunks, index_prefix)
+        combined = refined_text.strip() + "\n\n" + rendered_chunks
+        encoding = tiktoken.get_encoding("cl100k_base")
+        tokens = len(encoding.encode(combined))
+        if tokens > token_limit:
+            # Reduce chunks until under limit
+            for i in range(len(top_chunks) - 1, -1, -1):
+                reduced_chunks = top_chunks[:i + 1]
+                rendered_reduced = _render_context_sections(reduced_chunks, index_prefix)
+                combined_reduced = refined_text.strip() + "\n\n" + rendered_reduced
+                tokens_reduced = len(encoding.encode(combined_reduced))
+                if tokens_reduced <= token_limit:
+                    return combined_reduced
+            # If even one chunk is over, return just the summary
+            return refined_text.strip()
+        return combined
 
     except Exception:
         return _render_context_sections(top_chunks, index_prefix)
