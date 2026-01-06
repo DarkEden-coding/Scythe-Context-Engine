@@ -5,6 +5,7 @@ Embedding and FAISS index creation.
 import json
 import os
 import pickle
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -37,12 +38,14 @@ def embed_batch_with_retry(batch_idx: int, batch_texts: List[str]) -> tuple:
         except Exception as e:
             if attempt < max_retries - 1:
                 print(
-                    f"Embedding batch {batch_idx} failed (attempt {attempt + 1}/{max_retries}): {e}"
+                    f"Embedding batch {batch_idx} failed (attempt {attempt + 1}/{max_retries}): {e}",
+                    file=sys.stderr
                 )
                 time.sleep(retry_delay * (2**attempt))  # Exponential backoff
             else:
                 print(
-                    f"Embedding batch {batch_idx} failed permanently after {max_retries} attempts, skipping: {e}"
+                    f"Embedding batch {batch_idx} failed permanently after {max_retries} attempts, skipping: {e}",
+                    file=sys.stderr
                 )
                 return batch_idx, None, False  # Failure - skip this batch
 
@@ -64,7 +67,7 @@ def collect_successful_chunks_and_embeddings(
     """
     missing_count = embeddings.count(None)
     if missing_count > 0:
-        print(f"Warning: {missing_count} chunks failed to embed and will be skipped")
+        print(f"Warning: {missing_count} chunks failed to embed and will be skipped", file=sys.stderr)
         # Filter out chunks that couldn't be embedded
         successful_indices = [i for i, emb in enumerate(embeddings) if emb is not None]
         successful_chunks = [chunks[i] for i in successful_indices]
@@ -137,7 +140,7 @@ def create_faiss_index(chunks: List[Dict], quiet: bool = False) -> tuple:
     successful_chunks = [c for c in chunks if "embedding" in c]
     missing_count = len(chunks) - len(successful_chunks)
     if missing_count > 0:
-        print(f"Warning: {missing_count} chunks failed to embed and will be skipped")
+        print(f"Warning: {missing_count} chunks failed to embed and will be skipped", file=sys.stderr)
 
     # Update the chunks list in place if possible, or return the successful ones
     # For FAISS, we need the array of all successful embeddings

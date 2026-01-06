@@ -35,7 +35,8 @@ def index_repo(
         quiet: If True, suppress progress bars and reduce output verbosity.
     """
 
-    print(f"Indexing {repo_path}...")
+    if not quiet:
+        print(f"Indexing {repo_path}...")
     repo_path_obj = Path(repo_path)
     output_path = Path(output_prefix)
 

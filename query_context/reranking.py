@@ -1,5 +1,6 @@
 """Reranking functionality for query context."""
 
+import sys
 from typing import Dict, List
 
 from config.config import (
@@ -94,7 +95,7 @@ def _score_chunks_with_model(rerank_chunks: List[Dict], query: str) -> List[tupl
         try:
             ranking_data = ChunkRanking.model_validate_json(content)
         except Exception:
-            print("JSON parsing failed for ranking response, using default scores")
+            print("JSON parsing failed for ranking response, using default scores", file=sys.stderr)
             return [(5.0, chunk) for chunk in rerank_chunks]
         scored: List[tuple] = []
         for ranking in ranking_data.rankings:
@@ -102,9 +103,9 @@ def _score_chunks_with_model(rerank_chunks: List[Dict], query: str) -> List[tupl
             score = ranking.score
             if 0 <= chunk_id < len(rerank_chunks):
                 scored.append((float(score), rerank_chunks[chunk_id]))
-                print(f"Chunk {chunk_id}: Score {score}")
+                print(f"Chunk {chunk_id}: Score {score}", file=sys.stderr)
         return scored if scored else [(5.0, chunk) for chunk in rerank_chunks]
 
     except Exception as exc:
-        print(f"Ranking failed: {exc}, using default scores")
+        print(f"Ranking failed: {exc}, using default scores", file=sys.stderr)
         return [(5.0, chunk) for chunk in rerank_chunks]

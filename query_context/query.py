@@ -1,4 +1,4 @@
-l"""Main query functionality for retrieving context from indexed repository."""
+"""Main query functionality for retrieving context from indexed repository."""
 
 import json
 import pickle
@@ -18,6 +18,7 @@ def query_context(
     output_k: int = 5,
     no_cache: bool = False,
     token_limit: int = 15000,
+    quiet: bool = False,
 ):
     """Main query pipeline for retrieving context from indexed repository.
 
@@ -28,6 +29,7 @@ def query_context(
         output_k: Number of chunks to include in final output.
         no_cache: If True, skip semantic caching.
         token_limit: Maximum token count for the final output.
+        quiet: If True, suppress progress output.
 
     Returns:
         Refined context string containing relevant code and information.
@@ -37,7 +39,8 @@ def query_context(
 
     # Load index
 
-    print("Loading index...")
+    if not quiet:
+        print("Loading index...")
 
     index = faiss.read_index(f"{index_prefix}/index.faiss")
 
@@ -68,7 +71,8 @@ def query_context(
 
     # Embed query
 
-    print("Embedding query...")
+    if not quiet:
+        print("Embedding query...")
 
     query_emb = embed_single(query, model=EMBEDDING_MODEL)
 
@@ -81,7 +85,8 @@ def query_context(
 
     # Search
 
-    print(f"Searching (top-{top_k})...")
+    if not quiet:
+        print(f"Searching (top-{top_k})...")
 
     scores, indices = index.search(query_emb, top_k)
 
@@ -109,7 +114,8 @@ def query_context(
 
     # Rerank + extract
 
-    print("Reranking with LLM...")
+    if not quiet:
+        print("Reranking with LLM...")
 
     refined = rerank_and_extract(results, query, index_prefix, output_k, token_limit=token_limit)
 

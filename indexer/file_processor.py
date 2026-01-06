@@ -4,6 +4,7 @@ File collection and processing logic.
 
 import hashlib
 import os
+import sys
 import threading
 import traceback
 from collections import defaultdict
@@ -287,7 +288,7 @@ def process_files(
 
     # Print any errors that occurred
     for error in errors:
-        print(error)
+        print(error, file=sys.stderr)
 
     return chunks, file_summaries
 

@@ -1,6 +1,7 @@
 """Cache functionality for query context."""
 
 import hashlib
+import sys
 from typing import Dict, List, Optional
 
 from config.config import CACHE_TTL, cache
@@ -27,7 +28,7 @@ def check_cache(query: str, top_chunks: List[Dict]) -> Optional[str]:
         cached = cache.get(f"context_cache:{cache_key}")
 
         if cached:
-            print("Cache HIT")
+            print("Cache HIT", file=sys.stderr)
 
             return cached
 
@@ -54,4 +55,4 @@ def store_cache(query: str, top_chunks: List[Dict], refined: str):
         cache.set(f"context_cache:{cache_key}", refined, CACHE_TTL)
 
     except Exception as e:
-        print(f"Cache store failed: {e}")
+        print(f"Cache store failed: {e}", file=sys.stderr)

@@ -1,6 +1,5 @@
 import hashlib
 import sys
-import io
 from pathlib import Path
 import tiktoken
 
@@ -12,47 +11,6 @@ try:
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 except Exception:
     pass
-
-# Also wrap stdout/stderr to handle encoding errors and strip non-ASCII
-class Utf8Wrapper:
-    def __init__(self, stream):
-        self.stream = stream
-
-    def write(self, text):
-        if isinstance(text, str):
-            try:
-                # Strip non-ASCII characters before writing
-                safe_text = ''.join(char for char in text if ord(char) < 128)
-                self.stream.write(safe_text)
-            except (UnicodeEncodeError, Exception):
-                # If that fails, try to replace problematic characters
-                try:
-                    safe_text = text.encode('utf-8', errors='replace').decode('utf-8', errors='replace')
-                    safe_text = ''.join(char for char in safe_text if ord(char) < 128)
-                    self.stream.write(safe_text)
-                except Exception:
-                    # Last resort: write empty string
-                    pass
-        else:
-            try:
-                self.stream.write(str(text))
-            except Exception:
-                pass
-
-    def flush(self):
-        try:
-            self.stream.flush()
-        except Exception:
-            pass
-
-    def __getattr__(self, name):
-        return getattr(self.stream, name)
-
-# Wrap stdout and stderr
-if not isinstance(sys.stdout, Utf8Wrapper):
-    sys.stdout = Utf8Wrapper(sys.stdout)
-if not isinstance(sys.stderr, Utf8Wrapper):
-    sys.stderr = Utf8Wrapper(sys.stderr)
 
 # Add project root to sys.path to allow imports from indexer and query_context
 project_root = str(Path(__file__).parent.parent.absolute())
@@ -138,25 +96,15 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
         # Ensure the index directory exists
         index_path.mkdir(parents=True, exist_ok=True)
 
-        # 2. Run incremental indexing with output redirection to suppress encoding errors
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
+        # 2. Run incremental indexing
         try:
-            # Redirect to StringIO with ASCII-safe wrapper
-            sys.stdout = io.StringIO()
-            sys.stderr = io.StringIO()
             index_repo(str(project_path), str(index_path), auto_confirm=True, quiet=True)
-        except Exception:
-            # Silently handle any errors during indexing
-            pass
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+        except Exception as e:
+            # Log indexing errors to stderr but continue to query if possible
+            print(f"Indexing error (non-fatal): {e}", file=sys.stderr)
 
-        # 3. Perform the query with output redirection and Unicode error handling
+        # 3. Perform the query
         try:
-            sys.stdout = io.StringIO()
-            sys.stderr = io.StringIO()
             result = query_context(
                 query=query_text,
                 index_prefix=str(index_path),
@@ -164,6 +112,7 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
                 output_k=10,
                 no_cache=False,
                 token_limit=token_limit,
+                quiet=True,
             )
         except UnicodeEncodeError as ue:
             # Handle encoding errors by returning stripped result or error message
@@ -171,9 +120,6 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
         except Exception as ex:
             # Handle other exceptions
             return f"Query failed: {_strip_non_ascii(str(ex))}"
-        finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
 
         # Strip non-ASCII characters from result before returning
         cleaned_result = _strip_non_ascii(result)

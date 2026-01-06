@@ -2,6 +2,7 @@
 AST parsing and chunk extraction using tree-sitter.
 """
 
+import sys
 import traceback
 from typing import Dict, List, Optional
 
@@ -419,5 +420,5 @@ def extract_chunks(code: str, lang: str, file_path: str) -> List[Dict]:
         return chunks
 
     except Exception:
-        print(f"Parse error {file_path}: {traceback.format_exc()}")
+        print(f"Parse error {file_path}: {traceback.format_exc()}", file=sys.stderr)
         return []
