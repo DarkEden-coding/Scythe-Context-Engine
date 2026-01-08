@@ -6,18 +6,25 @@ Provides persistent caching with lazy TTL cleanup to replace Redis dependency.
 
 import sqlite3
 import time
+from pathlib import Path
 from typing import Optional
 
 
 class Cache:
     """SQLite-based cache with lazy TTL expiration."""
 
-    def __init__(self, db_path: str = "context_cache.db"):
+    def __init__(self, db_path: Optional[str] = None):
         """Initialize cache with SQLite database.
 
         Args:
-            db_path: Path to SQLite database file.
+            db_path: Path to SQLite database file. If None, uses .cache/context_cache.db in the project root.
         """
+        if db_path is None:
+            # Use absolute path relative to project root
+            project_root = Path(__file__).parent.absolute()
+            cache_dir = project_root / ".cache"
+            cache_dir.mkdir(exist_ok=True)
+            db_path = str(cache_dir / "context_cache.db")
         self.db_path = db_path
         self._init_db()
 

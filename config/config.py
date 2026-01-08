@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Literal
 
 from ollama import Client
@@ -14,7 +15,8 @@ from openrouter_client import OpenRouterClient
 
 logger = logging.getLogger(__name__)
 
-CONFIG_FILE = "config/config.json"
+# Use absolute path relative to this file's location, not the current working directory
+CONFIG_FILE = str(Path(__file__).parent / "config.json")
 ProviderType = Literal["openrouter", "ollama"]
 
 
@@ -34,7 +36,11 @@ def _load_config() -> Dict[str, Any]:
 _config = _load_config()
 
 # Cache
-cache = Cache()
+# Use absolute path in project root's .cache directory
+project_root = Path(__file__).parent.parent
+cache_dir = project_root / ".cache"
+cache_dir.mkdir(exist_ok=True)
+cache = Cache(str(cache_dir / "context_cache.db"))
 CACHE_TTL = _config["cache"]["ttl_seconds"]
 
 # Provider Constants
