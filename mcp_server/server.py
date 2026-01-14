@@ -5,10 +5,10 @@ import tiktoken
 
 # Force UTF-8 encoding for stdout/stderr to handle Unicode characters
 try:
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    if hasattr(sys.stderr, 'reconfigure'):
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
@@ -37,6 +37,7 @@ def get_project_identifier(project_path: str) -> str:
     # Use SHA256 hash of the absolute path to create a unique identifier
     return hashlib.sha256(project_path.encode()).hexdigest()[:16]
 
+
 def _strip_non_ascii(text: str) -> str:
     """Remove all non-ASCII characters from a string.
 
@@ -48,7 +49,7 @@ def _strip_non_ascii(text: str) -> str:
     """
     if not isinstance(text, str):
         return str(text)
-    return ''.join(char for char in text if ord(char) < 128)
+    return "".join(char for char in text if ord(char) < 128)
 
 
 def _truncate_to_token_limit(text: str, token_limit: int) -> tuple:
@@ -74,11 +75,19 @@ def _truncate_to_token_limit(text: str, token_limit: int) -> tuple:
 @mcp.tool()
 def query(query_text: str, project_location: str, token_limit: int = 15000) -> str:
     """
-    Search the project for relevant code context.
-    This tool will automatically index the project (incremental) before searching.
+    Search the project codebase using a semantic RAG engine. For optimal retrieval, follow these guidelines:
+
+    *   **Prioritize Semantic Intent**: Use descriptive, conceptual phrases that define the mechanism, data flow, or architectural bridge you are investigating.
+    *   **Avoid Keyword Stuffing**: Do not provide a list of disconnected terms (e.g., `auth login user token`). Instead, describe the interaction (e.g., `process for validating JWT tokens during user login`).
+    *   **Utilize Multi-Querying**: For complex tasks spanning multiple architectural layers or distinct logic paths, perform multiple targeted queries rather than one broad one.
+        *   *Example*: Run one query for `frontend state management of operation configs` and a separate query for `backend persistence and validation logic`.
+    *   **Focus on Relationships**: Describe how components interact.
+        *   **Good**: `Mapping and synchronization of operation IDs between frontend state and backend persistence`.
+        *   **Bad**: `operation IDs identification frontend backend saving loading`.
+    *   **Provide Technical Context**: This system aggregates and rescores results across a large token window (15k); detailed descriptions of specific logic or interactions will produce higher-quality context than generic terms.
 
     Args:
-        query_text: The search query or question about the codebase. Make it targeted and specific. ex: "Frontend user authentication" And target semantic matching, ie not "show me the code for user authentication" instead just be "user authentication frontend and backend"
+        query_text: The search query or question about the codebase.
         project_location: The absolute path to the project root directory on the local machine.
         token_limit: Maximum token count for the output (default 5000 tokens). Results exceeding this limit will be truncated.
     """
@@ -98,7 +107,9 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
 
         # 2. Run incremental indexing
         try:
-            index_repo(str(project_path), str(index_path), auto_confirm=True, quiet=True)
+            index_repo(
+                str(project_path), str(index_path), auto_confirm=True, quiet=True
+            )
         except Exception as e:
             # Log indexing errors to stderr but continue to query if possible
             print(f"Indexing error (non-fatal): {e}", file=sys.stderr)
@@ -125,10 +136,14 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
         cleaned_result = _strip_non_ascii(result)
 
         # Apply token limit truncation
-        truncated_result, was_truncated = _truncate_to_token_limit(cleaned_result, token_limit)
+        truncated_result, was_truncated = _truncate_to_token_limit(
+            cleaned_result, token_limit
+        )
 
         if was_truncated:
-            truncated_result += f"\n\n[Result truncated: output exceeded {token_limit} token limit]"
+            truncated_result += (
+                f"\n\n[Result truncated: output exceeded {token_limit} token limit]"
+            )
         return truncated_result
     except Exception as e:
         error_msg = _strip_non_ascii(str(e))

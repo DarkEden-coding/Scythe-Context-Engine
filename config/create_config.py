@@ -46,6 +46,13 @@ DEFAULTS = {
         "summarization_model": "gemma3:1b",
         "embedding_model": "qwen3-embedding:0.6b",
     },
+    "groq": {
+        "chat_model": "openai/gpt-oss-120b",
+        "batch_completion_window": "24h",
+        "use_batch_for_indexing": True,
+        "poll_interval_seconds": 30,
+        "timeout_seconds": 60,
+    },
 }
 
 
@@ -79,9 +86,11 @@ def main():
     print("=== Scythe Context Engine Configuration ===\n")
 
     provider = ""
-    while provider not in ["openrouter", "ollama"]:
+    while provider not in ["openrouter", "ollama", "groq"]:
         provider = (
-            input("Select provider (openrouter/ollama) [openrouter]: ").strip().lower()
+            input("Select provider (openrouter/ollama/groq) [openrouter]: ")
+            .strip()
+            .lower()
             or "openrouter"
         )
 
@@ -120,7 +129,7 @@ def main():
             if skip or ask("Use embedding whitelist?", True)
             else [],
         }
-    else:
+    elif provider == "ollama":
         p_def = DEFAULTS["ollama"]
         config["ollama"] = {
             "summarization_model": ask(
@@ -128,8 +137,81 @@ def main():
             ),
             "embedding_model": ask("Embedding Model", p_def["embedding_model"], skip),
         }
+    # provider == "groq" will be handled below
 
-    Path("config/config.json").write_text(json.dumps(config, indent=2, ensure_ascii=False))
+    # Add Groq configuration option (for primary provider or hybrid mode)
+    if ask("Configure Groq?", provider == "groq"):
+        key = ""
+        while not key:
+            key = input("Enter Groq API key: ").strip()
+
+        g_def = DEFAULTS["groq"]
+        config["groq"] = {
+            "api_key": key,
+            "chat_model": ask("Chat Model", g_def["chat_model"], skip),
+            "batch_completion_window": ask(
+                "Batch Completion Window (24h/48h/72h/7d)",
+                g_def["batch_completion_window"],
+                skip,
+            ),
+            "use_batch_for_indexing": ask(
+                "Use Batch for Indexing", g_def["use_batch_for_indexing"], skip
+            ),
+            "poll_interval_seconds": int(
+                ask("Poll Interval (seconds)", g_def["poll_interval_seconds"], skip)
+            ),
+            "timeout_seconds": int(
+                ask("Timeout (seconds)", g_def["timeout_seconds"], skip)
+            ),
+        }
+
+        # If Groq is not the primary provider, set it as batch_provider
+        if provider != "groq":
+            config["batch_provider"] = "groq"
+            print("\nNote: Groq configured for batch operations only.")
+            print(f"Primary provider: {provider}")
+            print("Batch provider: groq")
+        else:
+            # Groq is primary, need fallback for embeddings
+            print("\nNote: Groq doesn't support embeddings yet.")
+            print("You'll need to configure a fallback provider for embeddings.")
+
+            # Ask for fallback provider for embeddings
+            fallback = ""
+            while fallback not in ["openrouter", "ollama"]:
+                fallback = (
+                    input(
+                        "Select fallback provider for embeddings (openrouter/ollama) [openrouter]: "
+                    )
+                    .strip()
+                    .lower()
+                    or "openrouter"
+                )
+
+            config["embedding_provider"] = fallback
+
+            if fallback == "openrouter":
+                f_key = ""
+                while not f_key:
+                    f_key = input("Enter OpenRouter API key for embeddings: ").strip()
+                # Don't overwrite existing openrouter config if it exists
+                if "openrouter" not in config:
+                    config["openrouter"] = {}
+                config["openrouter"]["api_key"] = f_key
+                config["openrouter"]["embedding_model"] = ask(
+                    "Embedding Model", DEFAULTS["openrouter"]["embedding_model"], skip
+                )
+            else:  # ollama
+                # Don't overwrite existing ollama config if it exists
+                if "ollama" not in config:
+                    config["ollama"] = {}
+                config["ollama"]["embedding_model"] = ask(
+                    "Embedding Model", DEFAULTS["ollama"]["embedding_model"], skip
+                )
+
+    Path("config/config.json").write_text(
+        json.dumps(config, indent=2, ensure_ascii=False)
+    )
     print("\nconfig/config.json created successfully!")
 
 

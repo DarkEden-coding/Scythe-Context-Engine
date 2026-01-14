@@ -10,14 +10,26 @@ import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from tqdm import tqdm
 
 from line_profiler import profile
 from .ast_parser import extract_chunks
-from config.config import IGNORED_DIRS, IGNORED_FILES, SUPPORTED_LANGS
-from .summarizer import summarize_file, summarize_folder
+from config.config import (
+    IGNORED_DIRS,
+    IGNORED_FILES,
+    SUPPORTED_LANGS,
+    get_batch_config,
+    get_groq_batch_client,
+)
+from groq_batch_client import GroqBatchClient
+from .summarizer import (
+    batch_summarize_files,
+    batch_summarize_folders,
+    summarize_file,
+    summarize_folder,
+)
 from .chunk_storage import generate_chunk_id, save_full_chunk
 
 

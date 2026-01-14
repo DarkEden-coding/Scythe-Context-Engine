@@ -12,12 +12,13 @@ from typing import Any, Dict, List, Optional, Sequence, Literal
 from ollama import Client
 from cache import Cache
 from openrouter_client import OpenRouterClient
+from groq_batch_client import GroqBatchClient
 
 logger = logging.getLogger(__name__)
 
 # Use absolute path relative to this file's location, not the current working directory
 CONFIG_FILE = str(Path(__file__).parent / "config.json")
-ProviderType = Literal["openrouter", "ollama"]
+ProviderType = Literal["openrouter", "ollama", "groq"]
 
 
 def _load_config() -> Dict[str, Any]:
@@ -46,14 +47,24 @@ CACHE_TTL = _config["cache"]["ttl_seconds"]
 # Provider Constants
 PROVIDER: ProviderType = _config["provider"]
 
+# Batch Provider (optional, for bulk operations like indexing)
+BATCH_PROVIDER: Optional[str] = _config.get("batch_provider")
+
 # Client Initialization
 ollama_client = Client()
 _openrouter_client: Optional[OpenRouterClient] = None
-if _config["openrouter"]["api_key"]:
+if _config.get("openrouter", {}).get("api_key"):
     _openrouter_client = OpenRouterClient(
         api_key=_config["openrouter"]["api_key"],
         api_base=_config["openrouter"]["api_base"],
         timeout_seconds=_config["openrouter"]["timeout_seconds"],
+    )
+
+_groq_batch_client: Optional[GroqBatchClient] = None
+if _config.get("groq", {}).get("api_key"):
+    _groq_batch_client = GroqBatchClient(
+        api_key=_config["groq"]["api_key"],
+        timeout_seconds=_config.get("groq", {}).get("timeout_seconds", 60.0),
     )
 
 
@@ -179,19 +190,43 @@ def generate_text(
 
 
 def _default_chat_model() -> str:
-    return (
-        _config["openrouter"]["chat_model"]
-        if PROVIDER == "openrouter"
-        else _config["ollama"]["summarization_model"]
-    )
+    if PROVIDER == "openrouter":
+        return _config["openrouter"]["chat_model"]
+    elif PROVIDER == "groq":
+        return _config["groq"]["chat_model"]
+    else:
+        return _config["ollama"]["summarization_model"]
 
 
 def _default_embedding_model() -> str:
-    return (
-        _config["openrouter"]["embedding_model"]
-        if PROVIDER == "openrouter"
-        else _config["ollama"]["embedding_model"]
-    )
+    if PROVIDER == "openrouter":
+        return _config["openrouter"]["embedding_model"]
+    elif PROVIDER == "groq":
+        # Groq doesn't support embeddings, fall back to openrouter or ollama
+        if _config.get("openrouter", {}).get("api_key"):
+            return _config["openrouter"]["embedding_model"]
+        else:
+            return _config["ollama"]["embedding_model"]
+    else:
+        return _config["ollama"]["embedding_model"]
+
+
+def get_groq_batch_client() -> Optional[GroqBatchClient]:
+    """Get the Groq Batch API client if configured.
+
+    Returns:
+        GroqBatchClient instance or None if not configured.
+    """
+    return _groq_batch_client
+
+
+def get_batch_config() -> Dict[str, Any]:
+    """Get batch processing configuration.
+
+    Returns:
+        Dict with batch processing settings.
+    """
+    return _config.get("groq", {})
 
 
 def _set_additional_properties_false(schema: Any) -> None:

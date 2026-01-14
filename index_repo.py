@@ -24,7 +24,11 @@ from indexer.embedder import create_faiss_index, save_index
 
 @profile
 def index_repo(
-    repo_path: str, output_prefix: str, auto_confirm: bool = False, quiet: bool = False
+    repo_path: str,
+    output_prefix: str,
+    auto_confirm: bool = False,
+    quiet: bool = False,
+    use_batch: bool = False,
 ):
     """Main indexing pipeline for creating searchable repository index.
 
@@ -33,6 +37,7 @@ def index_repo(
         output_prefix: Directory prefix where index files will be saved.
         auto_confirm: If True, bypass the confirmation prompt.
         quiet: If True, suppress progress bars and reduce output verbosity.
+        use_batch: If True, use Groq Batch API for summarization (if configured).
     """
 
     if not quiet:
@@ -54,9 +59,7 @@ def index_repo(
                 old_hashes = meta.get("file_hashes", {})
         except Exception as e:
             if not quiet:
-                print(
-                    f"Could not load existing index: {e}. Performing full re-index."
-                )
+                print(f"Could not load existing index: {e}. Performing full re-index.")
             old_chunks = []
             old_hashes = {}
 

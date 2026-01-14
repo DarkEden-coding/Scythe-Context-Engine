@@ -14,6 +14,7 @@ Scythe Context Engine indexes code repositories by extracting functions, classes
 - **Smart Reranking**: LLM-based reranking of search results for improved relevance
 - **Semantic Caching**: Caches refined context to speed up repeated queries
 - **Parallel Processing**: Multi-threaded indexing and embedding for fast processing
+- **Batch Processing**: Optional Groq Batch API support for cost-effective indexing (up to 50% cost reduction)
 
 ## Architecture
 
@@ -46,11 +47,26 @@ uv pip install -e .
 
 ### Indexing a Repository
 
+**Standard (Real-time) Indexing:**
+
 ```bash
 uv run python index_repo.py /path/to/repo --output repo_index
 ```
 
-This creates:
+**Batch Indexing (Cost-Effective for Large Repos):**
+
+```bash
+uv run python index_repo.py /path/to/repo --output repo_index --batch
+```
+
+The `--batch` flag uses Groq's Batch API for summarization, which:
+- Reduces costs by up to 50%
+- Takes longer (minutes to hours depending on batch completion window)
+- Is ideal for initial indexing of large repositories
+
+See [Groq Batch Usage Guide](docs/GROQ_BATCH_USAGE.md) for details.
+
+**Output Files:**
 - `repo_index/index.faiss` - FAISS vector index
 - `repo_index/chunks.pkl` - Chunk metadata
 - `repo_index/meta.json` - Index metadata
