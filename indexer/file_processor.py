@@ -10,7 +10,7 @@ import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from tqdm import tqdm
 
@@ -20,10 +20,9 @@ from config.config import (
     IGNORED_DIRS,
     IGNORED_FILES,
     SUPPORTED_LANGS,
-    get_batch_config,
+    USE_BATCH_FOR_INDEXING,
     get_groq_batch_client,
 )
-from groq_batch_client import GroqBatchClient
 from .summarizer import (
     batch_summarize_files,
     batch_summarize_folders,
@@ -81,7 +80,7 @@ def collect_files_to_process(repo_path: str) -> List[Path]:
 
 @profile
 def process_single_file(
-    file_path: Path, repo_path: str, output_prefix: Optional[str] = None
+    file_path: Path, repo_path: str, output_prefix: Optional[str] = None, skip_summary: bool = False
 ) -> tuple:
     """Process a single file to extract chunks and summary.
 
@@ -89,6 +88,7 @@ def process_single_file(
         file_path: Path to the file to process.
         repo_path: Root path of the repository.
         output_prefix: Directory prefix for output files (for saving full chunks).
+        skip_summary: If True, skip individual file summarization (for batch mode).
 
     Returns:
         Tuple containing (chunks, file_summary, summary_chunk, error).
@@ -106,8 +106,11 @@ def process_single_file(
         # Process each chunk: generate IDs and save content
         _process_chunks(file_chunks, code, rel_path, file_path, output_prefix)
 
-        # Generate file summary if file is substantial
-        file_summary, summary_chunk = _generate_file_summary(code, rel_path)
+        # Generate file summary if file is substantial (skip in batch mode)
+        if skip_summary:
+            file_summary, summary_chunk = None, None
+        else:
+            file_summary, summary_chunk = _generate_file_summary(code, rel_path)
 
         return file_chunks, file_summary, summary_chunk, None
 
@@ -257,6 +260,14 @@ def process_files(
     file_summaries = {}
     errors = []
 
+    # Check if batch mode is configured BEFORE processing
+    batch_client = get_groq_batch_client()
+    use_batch = USE_BATCH_FOR_INDEXING and batch_client is not None
+
+    if use_batch:
+        if not quiet:
+            print("Batch mode enabled - will use Groq Batch API for summarization")
+
     # Thread-safe data structures
     chunks_lock = threading.Lock()
     summaries_lock = threading.Lock()
@@ -270,7 +281,8 @@ def process_files(
             with chunks_lock:
                 chunks.extend(file_chunks)
 
-        if file_summary:
+        # Only collect individual summaries if NOT using batch mode
+        if not use_batch and file_summary:
             rel_path, summary = file_summary
             with summaries_lock:
                 file_summaries[rel_path] = summary
@@ -281,10 +293,10 @@ def process_files(
             with errors_lock:
                 errors.append(error)
 
-    # Process files with 8 threads
+    # Process files with 8 threads (extracting chunks, skip summaries if using batch)
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [
-            executor.submit(process_single_file, file_path, repo_path, output_prefix)
+            executor.submit(process_single_file, file_path, repo_path, output_prefix, use_batch)
             for file_path in files_to_process
         ]
 
@@ -301,6 +313,53 @@ def process_files(
     # Print any errors that occurred
     for error in errors:
         print(error, file=sys.stderr)
+
+    # If batch mode is enabled, do batch summarization now
+    if use_batch:
+        if not quiet:
+            print("Using Groq Batch API for file summarization...")
+
+        # Collect file data for batch processing
+        file_data_for_batch = []
+        for file_path in files_to_process:
+            try:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    code = f.read()
+                if len(code) > 100:  # Only summarize substantial files
+                    rel_path = str(file_path.relative_to(repo_path))
+                    file_data_for_batch.append((rel_path, code))
+            except Exception as e:
+                if not quiet:
+                    print(f"Error reading {file_path} for batch: {e}", file=sys.stderr)
+
+        if file_data_for_batch:
+            try:
+                # Use batch summarization
+                batch_summaries = batch_summarize_files(
+                    file_data_for_batch,
+                    batch_client=batch_client,
+                    quiet=quiet
+                )
+
+                # Update file_summaries with batch results
+                file_summaries.update(batch_summaries)
+
+                # Remove old individual summary chunks and add batch summary chunks
+                chunks = [c for c in chunks if c.get("metadata", {}).get("level") != "file_summary"]
+                for rel_path, summary in batch_summaries.items():
+                    summary_chunk = {
+                        "text": f"FILE: {rel_path}\n{summary}",
+                        "metadata": {
+                            "file": rel_path,
+                            "level": "file_summary",
+                            "location": {"file": rel_path},
+                        },
+                    }
+                    chunks.append(summary_chunk)
+
+            except Exception as e:
+                if not quiet:
+                    print(f"Batch summarization failed, keeping individual summaries: {e}", file=sys.stderr)
 
     return chunks, file_summaries
 
@@ -333,7 +392,40 @@ def generate_folder_summaries(
     if not folders_to_process:
         return chunks
 
-    # Thread-safe chunks list
+    # Check if batch processing is configured
+    batch_client = get_groq_batch_client()
+
+    if USE_BATCH_FOR_INDEXING and batch_client:
+        if not quiet:
+            print("Using Groq Batch API for folder summarization...")
+
+        try:
+            # Use batch summarization for folders
+            folder_summaries = batch_summarize_folders(
+                folders_to_process,
+                batch_client=batch_client,
+                quiet=quiet
+            )
+
+            # Add batch folder summaries to chunks
+            for folder, folder_sum in folder_summaries.items():
+                folder_chunk = {
+                    "text": f"FOLDER: {folder}\n{folder_sum}",
+                    "metadata": {
+                        "folder": folder,
+                        "level": "folder_summary",
+                        "location": {"folder": folder},
+                    },
+                }
+                chunks.append(folder_chunk)
+
+            return chunks
+
+        except Exception as e:
+            if not quiet:
+                print(f"Batch folder summarization failed, using individual processing: {e}", file=sys.stderr)
+
+    # Fall back to individual processing (or if batch is disabled)
     chunks_lock = threading.Lock()
 
     def process_folder(folder_data):

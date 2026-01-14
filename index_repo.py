@@ -28,7 +28,6 @@ def index_repo(
     output_prefix: str,
     auto_confirm: bool = False,
     quiet: bool = False,
-    use_batch: bool = False,
 ):
     """Main indexing pipeline for creating searchable repository index.
 
@@ -37,7 +36,6 @@ def index_repo(
         output_prefix: Directory prefix where index files will be saved.
         auto_confirm: If True, bypass the confirmation prompt.
         quiet: If True, suppress progress bars and reduce output verbosity.
-        use_batch: If True, use Groq Batch API for summarization (if configured).
     """
 
     if not quiet:
@@ -206,4 +204,9 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    index_repo(args.repo_path, args.output, auto_confirm=args.yes, quiet=args.quiet)
+    index_repo(
+        args.repo_path,
+        args.output,
+        auto_confirm=args.yes,
+        quiet=args.quiet,
+    )

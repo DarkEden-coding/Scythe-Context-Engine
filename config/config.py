@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Sequence, Literal
 from ollama import Client
 from cache import Cache
 from openrouter_client import OpenRouterClient
+from groq_client import GroqClient
 from groq_batch_client import GroqBatchClient
 
 logger = logging.getLogger(__name__)
@@ -46,25 +47,38 @@ CACHE_TTL = _config["cache"]["ttl_seconds"]
 
 # Provider Constants
 PROVIDER: ProviderType = _config["provider"]
+EMBEDDING_PROVIDER: ProviderType = _config.get("embedding_provider", PROVIDER)
 
 # Batch Provider (optional, for bulk operations like indexing)
 BATCH_PROVIDER: Optional[str] = _config.get("batch_provider")
 
+# Batch Indexing Setting (top-level config)
+USE_BATCH_FOR_INDEXING: bool = _config.get("use_batch_for_indexing", False)
+
 # Client Initialization
 ollama_client = Client()
+
 _openrouter_client: Optional[OpenRouterClient] = None
 if _config.get("openrouter", {}).get("api_key"):
+    # Use .get() with defaults for optional fields to handle legacy configs
+    openrouter_config = _config.get("openrouter", {})
     _openrouter_client = OpenRouterClient(
-        api_key=_config["openrouter"]["api_key"],
-        api_base=_config["openrouter"]["api_base"],
-        timeout_seconds=_config["openrouter"]["timeout_seconds"],
+        api_key=openrouter_config["api_key"],
+        api_base=openrouter_config.get("api_base", "https://openrouter.ai/api/v1"),
+        timeout_seconds=openrouter_config.get("timeout_seconds", 15),
     )
 
+_groq_client: Optional[GroqClient] = None
 _groq_batch_client: Optional[GroqBatchClient] = None
 if _config.get("groq", {}).get("api_key"):
+    groq_config = _config.get("groq", {})
+    _groq_client = GroqClient(
+        api_key=groq_config["api_key"],
+        timeout_seconds=groq_config.get("timeout_seconds", 60.0),
+    )
     _groq_batch_client = GroqBatchClient(
-        api_key=_config["groq"]["api_key"],
-        timeout_seconds=_config.get("groq", {}).get("timeout_seconds", 60.0),
+        api_key=groq_config["api_key"],
+        timeout_seconds=groq_config.get("timeout_seconds", 60.0),
     )
 
 
@@ -85,6 +99,12 @@ def _require_openrouter() -> OpenRouterClient:
     if _openrouter_client is None:
         raise ValueError("OpenRouter API key missing in config.")
     return _openrouter_client
+
+
+def _require_groq() -> GroqClient:
+    if _groq_client is None:
+        raise ValueError("Groq API key missing in config.")
+    return _groq_client
 
 
 def _retry_with_backoff(func, *args, **kwargs):
@@ -117,7 +137,7 @@ def embed_texts(texts: Sequence[str], model: Optional[str] = None) -> List[List[
     chosen_model = model or _default_embedding_model()
 
     def _call():
-        if PROVIDER == "openrouter":
+        if EMBEDDING_PROVIDER == "openrouter":
             client = _require_openrouter()
             options = _get_openrouter_options(None, "embedding")
             return client.embed_texts(list(texts), chosen_model, options=options)
@@ -145,7 +165,15 @@ def chat_completion(
     chosen_model = model or _default_chat_model()
 
     def _call():
-        if PROVIDER == "openrouter":
+        if PROVIDER == "groq":
+            client = _require_groq()
+            return client.chat_completion(
+                messages=list(messages),
+                model=chosen_model,
+                response_format=response_format,
+                options=options,
+            )
+        elif PROVIDER == "openrouter":
             client = _require_openrouter()
             req_options = _get_openrouter_options(options, "chat")
             return client.chat_completion(
@@ -154,13 +182,13 @@ def chat_completion(
                 response_format=response_format,
                 options=req_options,
             )
-
-        return ollama_client.chat(
-            model=chosen_model,
-            messages=list(messages),
-            format=response_format,
-            options=options or {},
-        )
+        else:  # ollama
+            return ollama_client.chat(
+                model=chosen_model,
+                messages=list(messages),
+                format=response_format,
+                options=options or {},
+            )
 
     return _retry_with_backoff(_call)
 
@@ -173,42 +201,45 @@ def generate_text(
     chosen_model = model or _default_chat_model()
 
     def _call():
-        if PROVIDER == "openrouter":
+        if PROVIDER == "groq":
+            client = _require_groq()
+            return client.generate_text(prompt, chosen_model, options=options)
+        elif PROVIDER == "openrouter":
             client = _require_openrouter()
             req_options = _get_openrouter_options(options, "chat")
             return client.generate_text(prompt, chosen_model, options=req_options)
-
-        response = ollama_client.generate(
-            model=chosen_model, prompt=prompt, options=options or {}
-        )
-        content = response.get("response")
-        if not isinstance(content, str):
-            raise ValueError("Ollama response missing text content.")
-        return content
+        else:  # ollama
+            response = ollama_client.generate(
+                model=chosen_model, prompt=prompt, options=options or {}
+            )
+            content = response.get("response")
+            if not isinstance(content, str):
+                raise ValueError("Ollama response missing text content.")
+            return content
 
     return _retry_with_backoff(_call)
 
 
 def _default_chat_model() -> str:
     if PROVIDER == "openrouter":
-        return _config["openrouter"]["chat_model"]
+        return _config["openrouter"].get("chat_model", "openai/gpt-oss-120b:exacto")
     elif PROVIDER == "groq":
-        return _config["groq"]["chat_model"]
+        return _config["groq"].get("chat_model", "openai/gpt-oss-120b")
     else:
-        return _config["ollama"]["summarization_model"]
+        return _config["ollama"].get("summarization_model", "gemma3:1b")
 
 
 def _default_embedding_model() -> str:
-    if PROVIDER == "openrouter":
+    if EMBEDDING_PROVIDER == "openrouter":
         return _config["openrouter"]["embedding_model"]
-    elif PROVIDER == "groq":
+    elif EMBEDDING_PROVIDER == "groq":
         # Groq doesn't support embeddings, fall back to openrouter or ollama
         if _config.get("openrouter", {}).get("api_key"):
-            return _config["openrouter"]["embedding_model"]
+            return _config["openrouter"].get("embedding_model", "openai/text-embedding-3-small")
         else:
-            return _config["ollama"]["embedding_model"]
+            return _config["ollama"].get("embedding_model", "qwen3-embedding:0.6b")
     else:
-        return _config["ollama"]["embedding_model"]
+        return _config["ollama"].get("embedding_model", "qwen3-embedding:0.6b")
 
 
 def get_groq_batch_client() -> Optional[GroqBatchClient]:
@@ -252,7 +283,7 @@ def _set_additional_properties_false(schema: Any) -> None:
 def build_structured_output_format(
     schema: Dict[str, Any], schema_name: str
 ) -> Optional[Dict[str, Any]]:
-    if PROVIDER == "openrouter":
+    if PROVIDER in ("openrouter", "groq"):
         # Ensure schema is strict-compliant
         _set_additional_properties_false(schema)
         return {
