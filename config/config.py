@@ -14,6 +14,7 @@ from cache import Cache
 from openrouter_client import OpenRouterClient
 from groq_client import GroqClient
 from groq_batch_client import GroqBatchClient
+from config.pattern_matcher import FilePatternMatcher
 
 logger = logging.getLogger(__name__)
 
@@ -319,5 +320,23 @@ def extract_chat_content(response: Any) -> Optional[str]:
 SUMMARIZATION_MODEL = _default_chat_model()
 EMBEDDING_MODEL = _default_embedding_model()
 SUPPORTED_LANGS = _config["indexing"]["supported_languages"]
-IGNORED_DIRS = set(_config["indexing"]["ignored_dirs"])
-IGNORED_FILES = set(_config["indexing"]["ignored_files"])
+
+
+def _load_ignore_patterns() -> List[str]:
+    """Load patterns with backward compatibility."""
+    if "ignore_patterns" in _config["indexing"]:
+        return _config["indexing"]["ignore_patterns"]
+    else:
+        # Legacy: combine ignored_dirs and ignored_files
+        patterns = []
+        patterns.extend(_config["indexing"].get("ignored_dirs", []))
+        patterns.extend(_config["indexing"].get("ignored_files", []))
+        return patterns
+
+
+# New pattern matcher (primary interface)
+IGNORE_PATTERN_MATCHER = FilePatternMatcher(_load_ignore_patterns())
+
+# Legacy exports (deprecated but kept for compatibility)
+IGNORED_DIRS = set(_config["indexing"].get("ignored_dirs", []))
+IGNORED_FILES = set(_config["indexing"].get("ignored_files", []))

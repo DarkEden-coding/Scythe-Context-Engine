@@ -2,8 +2,9 @@
 import json
 from pathlib import Path
 
-DEFAULTS = {
+DEFAULTS: dict = {
     "use_batch_for_indexing": False,
+    "use_batch_for_mcp_incremental_indexing": False,
     "indexing": {
         "supported_languages": {
             ".py": "python",
@@ -16,23 +17,24 @@ DEFAULTS = {
             ".rs": "rust",
             ".md": "markdown",
         },
-        "ignored_dirs": [
+        "ignore_patterns": [
             ".git",
             "node_modules",
             "__pycache__",
-            "venv",
-            ".venv",
-            "static",
-            ".cudavenv",
-            "build",
-        ],
-        "ignored_files": [
+            "**/.venv/**",
+            "**/venv/**",
+            "**/build/**",
+            "**/dist/**",
+            "*.pyc",
+            "*.lock",
             "package-lock.json",
             "yarn.lock",
             "pnpm-lock.yaml",
             "bun.lockb",
             "Gemfile.lock",
             "Cargo.lock",
+            "static",
+            ".cudavenv",
         ],
     },
     "openrouter": {
@@ -94,7 +96,7 @@ def get_openrouter_config(api_key, skip_interactive, use_defaults=True):
     Returns:
         Complete OpenRouter configuration dictionary
     """
-    p_def = DEFAULTS["openrouter"]
+    p_def: dict = DEFAULTS["openrouter"]
     config = {
         "api_key": api_key,
         "api_base": p_def["api_base"],
@@ -138,25 +140,24 @@ def main():
     print("  • groq       - Fast inference via Groq (requires embedding fallback)")
     print()
 
-    provider = ""
+    provider: str = ""
     while provider not in ["openrouter", "ollama", "groq"]:
         provider = (
             input("Select provider [openrouter]: ").strip().lower() or "openrouter"
         )
 
-    skip = ask("\nUse default settings for everything else?", True)
+    skip: bool = ask("\nUse default settings for everything else?", True)
 
-    config = {
+    config: dict = {
         "cache": {"ttl_seconds": 86400},
         "provider": provider,
         "use_batch_for_indexing": False,  # Will be set later based on Groq config
         "indexing": {
             "supported_languages": DEFAULTS["indexing"]["supported_languages"],
-            "ignored_dirs": get_list(
-                "ignored directories", DEFAULTS["indexing"]["ignored_dirs"], skip
-            ),
-            "ignored_files": get_list(
-                "ignored files", DEFAULTS["indexing"]["ignored_files"], skip
+            "ignore_patterns": get_list(
+                "ignore patterns (supports wildcards: *.lock, **/build/**, etc.)",
+                DEFAULTS["indexing"]["ignore_patterns"],
+                skip,
             ),
         },
     }
@@ -166,15 +167,15 @@ def main():
     print("-" * 50)
 
     if provider == "openrouter":
-        key = ""
+        key: str = ""
         while not key:
             key = input("Enter your OpenRouter API key: ").strip()
-        config["openrouter"] = get_openrouter_config(key, skip, use_defaults=skip)
+        config["openrouter"]: dict = get_openrouter_config(key, skip, use_defaults=skip)
         print("✓ OpenRouter configured")
     elif provider == "ollama":
         print("Make sure Ollama is running locally before proceeding.\n")
-        p_def = DEFAULTS["ollama"]
-        config["ollama"] = {
+        p_def: dict = DEFAULTS["ollama"]
+        config["ollama"]: dict = {
             "summarization_model": ask(
                 "Summarization Model", p_def["summarization_model"], skip
             ),
@@ -182,12 +183,12 @@ def main():
         }
         print("✓ Ollama configured")
     elif provider == "groq":
-        key = ""
+        key: str = ""
         while not key:
             key = input("Enter your Groq API key: ").strip()
 
-        g_def = DEFAULTS["groq"]
-        config["groq"] = {
+        g_def: dict = DEFAULTS["groq"]
+        config["groq"]: dict = {
             "api_key": key,
             "chat_model": ask("Chat Model", g_def["chat_model"], skip),
             "batch_completion_window": ask(
@@ -236,24 +237,24 @@ def main():
         print("  • ollama     - Local embeddings via Ollama")
         print()
 
-        fallback = ""
+        fallback: str = ""
         while fallback not in ["openrouter", "ollama"]:
             fallback = (
                 input("Select embedding provider [openrouter]: ").strip().lower()
                 or "openrouter"
             )
 
-        config["embedding_provider"] = fallback
+        config["embedding_provider"]: str = fallback
 
         if fallback == "openrouter":
-            f_key = ""
+            f_key: str = ""
             while not f_key:
                 f_key = input("Enter OpenRouter API key: ").strip()
-            config["openrouter"] = get_openrouter_config(f_key, skip, use_defaults=True)
+            config["openrouter"]: dict = get_openrouter_config(f_key, skip, use_defaults=True)
             print("✓ OpenRouter configured for embeddings")
         else:  # ollama
             if "ollama" not in config:
-                config["ollama"] = {}
+                config["ollama"]: dict = {}
             config["ollama"]["embedding_model"] = ask(
                 "Embedding Model", DEFAULTS["ollama"]["embedding_model"], skip
             )
@@ -267,12 +268,12 @@ def main():
         print()
 
         if ask("Configure Groq for batch operations?", False):
-            key = ""
+            key: str = ""
             while not key:
                 key = input("Enter your Groq API key: ").strip()
 
-            g_def = DEFAULTS["groq"]
-            config["groq"] = {
+            g_def: dict = DEFAULTS["groq"]
+            config["groq"]: dict = {
                 "api_key": key,
                 "chat_model": ask("Chat Model", g_def["chat_model"], skip),
                 "batch_completion_window": ask(
@@ -287,7 +288,7 @@ def main():
                     ask("Timeout (seconds)", g_def["timeout_seconds"], skip)
                 ),
             }
-            config["batch_provider"] = "groq"
+            config["batch_provider"]: str = "groq"
             print("✓ Groq configured for batch operations")
 
             # Ask about batch indexing

@@ -17,8 +17,7 @@ from tqdm import tqdm
 from line_profiler import profile
 from .ast_parser import extract_chunks
 from config.config import (
-    IGNORED_DIRS,
-    IGNORED_FILES,
+    IGNORE_PATTERN_MATCHER,
     SUPPORTED_LANGS,
     USE_BATCH_FOR_INDEXING,
     USE_BATCH_FOR_MCP_INCREMENTAL_INDEXING,
@@ -51,30 +50,41 @@ def hash_file(file_path: Path) -> str:
 
 
 def collect_files_to_process(repo_path: str) -> List[Path]:
-    """Collect all supported code files from the repository.
+    """Collect all supported code files, excluding ignored patterns.
 
     Args:
         repo_path: Root path of the repository to index.
 
     Returns:
-        List of Path objects for supported code files, excluding ignored directories and files.
+        List of Path objects for supported code files, excluding ignored patterns.
     """
     files_to_process = []
+    repo_path_obj = Path(repo_path)
 
-    for root, _, files in os.walk(repo_path):
-        # Skip ignored directories (check if any path component matches)
-        path_parts = Path(root).parts
-        if any(part in IGNORED_DIRS for part in path_parts):
-            continue
+    for root, dirs, files in os.walk(repo_path):
+        root_path = Path(root)
+        rel_root = root_path.relative_to(repo_path_obj)
 
+        # Prune directories in-place to avoid traversing ignored trees
+        dirs_to_remove = []
+        for dir_name in dirs:
+            dir_rel_path = str(rel_root / dir_name)
+            if IGNORE_PATTERN_MATCHER.matches(dir_rel_path):
+                dirs_to_remove.append(dir_name)
+
+        for dir_name in dirs_to_remove:
+            dirs.remove(dir_name)
+
+        # Filter files
         for file in files:
-            # Skip ignored files
-            if file in IGNORED_FILES:
+            file_rel_path = str(rel_root / file)
+
+            if IGNORE_PATTERN_MATCHER.matches(file_rel_path):
                 continue
 
             ext = Path(file).suffix
             if ext in SUPPORTED_LANGS:
-                files_to_process.append(Path(root) / file)
+                files_to_process.append(root_path / file)
 
     return files_to_process
 
