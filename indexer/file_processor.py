@@ -21,6 +21,7 @@ from config.config import (
     IGNORED_FILES,
     SUPPORTED_LANGS,
     USE_BATCH_FOR_INDEXING,
+    USE_BATCH_FOR_MCP_INCREMENTAL_INDEXING,
     get_groq_batch_client,
 )
 from .summarizer import (
@@ -80,7 +81,10 @@ def collect_files_to_process(repo_path: str) -> List[Path]:
 
 @profile
 def process_single_file(
-    file_path: Path, repo_path: str, output_prefix: Optional[str] = None, skip_summary: bool = False
+    file_path: Path,
+    repo_path: str,
+    output_prefix: Optional[str] = None,
+    skip_summary: bool = False,
 ) -> tuple:
     """Process a single file to extract chunks and summary.
 
@@ -243,6 +247,7 @@ def process_files(
     repo_path: str,
     output_prefix: Optional[str] = None,
     quiet: bool = False,
+    for_mcp_query: bool = False,
 ) -> tuple:
     """Process files to extract chunks and file summaries using multithreading.
 
@@ -251,6 +256,8 @@ def process_files(
         repo_path: Root path of the repository.
         output_prefix: Directory prefix for output files (for saving full chunks).
         quiet: If True, suppress progress bars.
+        for_mcp_query: If True, indicates processing is triggered by MCP query.
+                       Uses MCP-specific batch setting instead of general setting.
 
     Returns:
         Tuple containing (chunks, file_summaries) where chunks is a list of all extracted chunks
@@ -262,7 +269,10 @@ def process_files(
 
     # Check if batch mode is configured BEFORE processing
     batch_client = get_groq_batch_client()
-    use_batch = USE_BATCH_FOR_INDEXING and batch_client is not None
+    use_batch = (
+        (USE_BATCH_FOR_MCP_INCREMENTAL_INDEXING if for_mcp_query else USE_BATCH_FOR_INDEXING)
+        and batch_client is not None
+    )
 
     if use_batch:
         if not quiet:
@@ -296,7 +306,9 @@ def process_files(
     # Process files with 8 threads (extracting chunks, skip summaries if using batch)
     with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [
-            executor.submit(process_single_file, file_path, repo_path, output_prefix, use_batch)
+            executor.submit(
+                process_single_file, file_path, repo_path, output_prefix, use_batch
+            )
             for file_path in files_to_process
         ]
 
@@ -336,16 +348,18 @@ def process_files(
             try:
                 # Use batch summarization
                 batch_summaries = batch_summarize_files(
-                    file_data_for_batch,
-                    batch_client=batch_client,
-                    quiet=quiet
+                    file_data_for_batch, batch_client=batch_client, quiet=quiet
                 )
 
                 # Update file_summaries with batch results
                 file_summaries.update(batch_summaries)
 
                 # Remove old individual summary chunks and add batch summary chunks
-                chunks = [c for c in chunks if c.get("metadata", {}).get("level") != "file_summary"]
+                chunks = [
+                    c
+                    for c in chunks
+                    if c.get("metadata", {}).get("level") != "file_summary"
+                ]
                 for rel_path, summary in batch_summaries.items():
                     summary_chunk = {
                         "text": f"FILE: {rel_path}\n{summary}",
@@ -359,7 +373,10 @@ def process_files(
 
             except Exception as e:
                 if not quiet:
-                    print(f"Batch summarization failed, keeping individual summaries: {e}", file=sys.stderr)
+                    print(
+                        f"Batch summarization failed, keeping individual summaries: {e}",
+                        file=sys.stderr,
+                    )
 
     return chunks, file_summaries
 
@@ -402,9 +419,7 @@ def generate_folder_summaries(
         try:
             # Use batch summarization for folders
             folder_summaries = batch_summarize_folders(
-                folders_to_process,
-                batch_client=batch_client,
-                quiet=quiet
+                folders_to_process, batch_client=batch_client, quiet=quiet
             )
 
             # Add batch folder summaries to chunks
@@ -423,7 +438,10 @@ def generate_folder_summaries(
 
         except Exception as e:
             if not quiet:
-                print(f"Batch folder summarization failed, using individual processing: {e}", file=sys.stderr)
+                print(
+                    f"Batch folder summarization failed, using individual processing: {e}",
+                    file=sys.stderr,
+                )
 
     # Fall back to individual processing (or if batch is disabled)
     chunks_lock = threading.Lock()

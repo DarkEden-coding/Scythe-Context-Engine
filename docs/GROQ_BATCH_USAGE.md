@@ -174,7 +174,7 @@ How often to check batch status:
 
 ### Use Batch for Indexing
 
-Control whether batch mode is used by default:
+Control whether batch mode is used by default for CLI indexing:
 
 ```json
 "use_batch_for_indexing": true
@@ -182,6 +182,43 @@ Control whether batch mode is used by default:
 
 - If `false`, batch mode is disabled even with `--batch` flag
 - Useful for temporarily disabling without changing command
+- Applies to CLI indexing operations only
+
+### MCP Query Incremental Indexing
+
+The MCP query tool automatically runs incremental indexing before each query to ensure
+fresh results. You can control whether this uses the Groq Batch API:
+
+```json
+{
+  "use_batch_for_mcp_incremental_indexing": false
+}
+```
+
+**false (default)**: Uses real-time API for MCP incremental indexing
+- Pros: Fast query responses (~1-2 minutes for incremental updates)
+- Cons: Higher cost for incremental updates
+
+**true**: Uses Batch API for MCP incremental indexing
+- Pros: Lower cost (~50% savings)
+- Cons: Long wait times (20+ minutes) for first query after changes
+
+**Recommendation**: Keep this setting `false` for interactive use cases where
+query responsiveness is important. Enable it only for cost-sensitive scenarios
+where you can tolerate longer initial query times.
+
+**Example Scenario:**
+
+```json
+{
+  "use_batch_for_indexing": true,              // CLI uses batch (for initial indexing)
+  "use_batch_for_mcp_incremental_indexing": false  // MCP uses real-time (for fast queries)
+}
+```
+
+This configuration gives you:
+- Cost-effective initial indexing via CLI with batch mode
+- Fast query responses via MCP with real-time incremental updates
 
 ## Error Handling
 

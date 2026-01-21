@@ -215,6 +215,18 @@ def main():
             skip,
         )
 
+        # Ask about batch indexing for MCP queries
+        print("\nMCP Query Incremental Indexing:")
+        print("MCP queries can trigger incremental indexing before each query.")
+        print("⚠️  WARNING: Batch indexing takes 5+ minutes per update")
+        print("   (vs <1 minute for standard API calls)")
+        print("   This can significantly delay query responses.")
+        config["use_batch_for_mcp_incremental_indexing"] = ask(
+            "Enable batch API for MCP-triggered incremental indexing?",
+            DEFAULTS["use_batch_for_mcp_incremental_indexing"],
+            skip,
+        )
+
     # Step 3: Configure embeddings (if Groq is primary or optional batch mode)
     if provider == "groq":
         print("\nStep 3: Configure Embeddings Provider")
@@ -286,6 +298,18 @@ def main():
             config["use_batch_for_indexing"] = ask(
                 "Enable batch indexing to save money?",
                 DEFAULTS["use_batch_for_indexing"],
+                skip,
+            )
+
+            # Ask about batch indexing for MCP queries
+            print("\nMCP Query Incremental Indexing:")
+            print("MCP queries can trigger incremental indexing before each query.")
+            print("⚠️  WARNING: Batch indexing takes 5+ minutes per update")
+            print("   (vs <1 minute for standard API calls)")
+            print("   This can significantly delay query responses.")
+            config["use_batch_for_mcp_incremental_indexing"] = ask(
+                "Enable batch API for MCP-triggered incremental indexing?",
+                DEFAULTS["use_batch_for_mcp_incremental_indexing"],
                 skip,
             )
 

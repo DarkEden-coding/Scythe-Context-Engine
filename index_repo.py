@@ -28,6 +28,7 @@ def index_repo(
     output_prefix: str,
     auto_confirm: bool = False,
     quiet: bool = False,
+    for_mcp_query: bool = False,
 ):
     """Main indexing pipeline for creating searchable repository index.
 
@@ -36,6 +37,8 @@ def index_repo(
         output_prefix: Directory prefix where index files will be saved.
         auto_confirm: If True, bypass the confirmation prompt.
         quiet: If True, suppress progress bars and reduce output verbosity.
+        for_mcp_query: If True, indicates indexing is triggered by MCP query.
+                       Uses MCP-specific batch setting instead of general setting.
     """
 
     if not quiet:
@@ -129,7 +132,7 @@ def index_repo(
         else:
             print(f"Processing {len(files_to_process)} changed/new files...")
         new_chunks, file_summaries = process_files(
-            files_to_process, repo_path, output_prefix, quiet=quiet
+            files_to_process, repo_path, output_prefix, quiet=quiet, for_mcp_query=for_mcp_query
         )
 
     # Merge file summaries: old ones for unchanged files + new ones

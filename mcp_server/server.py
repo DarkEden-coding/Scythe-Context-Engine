@@ -108,7 +108,7 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
         # 2. Run incremental indexing
         try:
             index_repo(
-                str(project_path), str(index_path), auto_confirm=True, quiet=True
+                str(project_path), str(index_path), auto_confirm=True, quiet=True, for_mcp_query=True
             )
         except Exception as e:
             # Log indexing errors to stderr but continue to query if possible

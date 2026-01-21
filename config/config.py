@@ -55,6 +55,11 @@ BATCH_PROVIDER: Optional[str] = _config.get("batch_provider")
 # Batch Indexing Setting (top-level config)
 USE_BATCH_FOR_INDEXING: bool = _config.get("use_batch_for_indexing", False)
 
+# MCP-Specific Batch Indexing Setting (for incremental indexing triggered by MCP queries)
+USE_BATCH_FOR_MCP_INCREMENTAL_INDEXING: bool = _config.get(
+    "use_batch_for_mcp_incremental_indexing", False
+)
+
 # Client Initialization
 ollama_client = Client()
 
