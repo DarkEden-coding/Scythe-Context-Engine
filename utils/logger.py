@@ -15,7 +15,7 @@ import os
 import sys
 import threading
 from contextvars import ContextVar
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -70,7 +70,10 @@ class JSONLogFormatter(logging.Formatter):
 
         # Build log entry
         log_entry = {
-            "timestamp": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[
+                :-3
+            ]
+            + "Z",
             "level": record.levelname,
         }
 
@@ -132,7 +135,7 @@ def init_logging_system() -> None:
     _system_logger.setLevel(getattr(logging, _get_log_level()))
 
     # Remove and close existing handlers to prevent resource leaks
-    for handler in list(_system_logger.handlers):
+    for handler in _system_logger.handlers[:]:
         _system_logger.removeHandler(handler)
         handler.close()
 
@@ -160,7 +163,7 @@ def create_query_logger(query_id: str) -> str:
         Path to the query log file.
     """
     log_dir = _get_log_dir()
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     query_log_dir = log_dir / "queries" / date_str
     query_log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -208,7 +211,7 @@ def close_query_logger(query_id: str) -> None:
     with _query_loggers_lock:
         if query_id in _query_loggers:
             logger = _query_loggers.pop(query_id)
-            for handler in list(logger.handlers):
+            for handler in logger.handlers[:]:
                 logger.removeHandler(handler)
                 handler.flush()
                 handler.close()
@@ -272,9 +275,7 @@ def log_event(
         if _system_logger is None:
             init_logging_system()
         logger = _system_logger
-
-    # Create log record with custom attributes
-    log_method = getattr(logger, level.lower(), logger.info)
+        assert logger is not None, "System logger should be initialized"
 
     # Prepare the message
     log_message = message or event
@@ -338,7 +339,7 @@ def cleanup_old_logs(
     if not queries_dir.exists():
         return {"deleted_files": 0, "freed_bytes": 0, "status": "no_logs_directory"}
 
-    cutoff_date = datetime.utcnow() - timedelta(days=days)
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
     deleted_count = 0
     freed_bytes = 0
 
