@@ -1,6 +1,7 @@
 """Reranking functionality for query context."""
 
 import sys
+import time
 from typing import Dict, List
 
 from config.config import (
@@ -9,6 +10,7 @@ from config.config import (
     chat_completion,
     extract_chat_content,
 )
+from utils.logger import log_event
 from .models import ChunkRanking
 
 
@@ -78,6 +80,21 @@ def _score_chunks_with_model(rerank_chunks: List[Dict], query: str) -> List[tupl
     Returns:
         List of tuples containing (score, chunk) pairs.
     """
+    reranking_start_time = time.time()
+
+    log_event(
+        event="reranking_start",
+        level="INFO",
+        phase="reranking",
+        component="reranking",
+        message="Starting chunk reranking",
+        data={
+            "chunks_to_rerank": len(rerank_chunks),
+            "query_length": len(query),
+            "model": SUMMARIZATION_MODEL,
+        },
+    )
+
     prompt = _build_rerank_prompt(rerank_chunks, query)
     try:
         response_format = build_structured_output_format(
@@ -96,6 +113,15 @@ def _score_chunks_with_model(rerank_chunks: List[Dict], query: str) -> List[tupl
             ranking_data = ChunkRanking.model_validate_json(content)
         except Exception:
             print("JSON parsing failed for ranking response, using default scores", file=sys.stderr)
+            reranking_duration_ms = (time.time() - reranking_start_time) * 1000
+            log_event(
+                event="reranking_error",
+                level="WARNING",
+                phase="reranking",
+                component="reranking",
+                message="JSON parsing failed for ranking response",
+                duration_ms=reranking_duration_ms,
+            )
             return [(5.0, chunk) for chunk in rerank_chunks]
         scored: List[tuple] = []
         for ranking in ranking_data.rankings:
@@ -104,8 +130,35 @@ def _score_chunks_with_model(rerank_chunks: List[Dict], query: str) -> List[tupl
             if 0 <= chunk_id < len(rerank_chunks):
                 scored.append((float(score), rerank_chunks[chunk_id]))
                 print(f"Chunk {chunk_id}: Score {score}", file=sys.stderr)
+
+        reranking_duration_ms = (time.time() - reranking_start_time) * 1000
+        scores = [s[0] for s in scored] if scored else []
+        log_event(
+            event="chunks_scored",
+            level="INFO",
+            phase="reranking",
+            component="reranking",
+            message="Chunks scored successfully",
+            data={
+                "chunks_scored": len(scored),
+                "min_score": min(scores) if scores else 0,
+                "max_score": max(scores) if scores else 0,
+                "avg_score": sum(scores) / len(scores) if scores else 0,
+            },
+            duration_ms=reranking_duration_ms,
+        )
         return scored if scored else [(5.0, chunk) for chunk in rerank_chunks]
 
     except Exception as exc:
+        reranking_duration_ms = (time.time() - reranking_start_time) * 1000
         print(f"Ranking failed: {exc}, using default scores", file=sys.stderr)
+        log_event(
+            event="reranking_error",
+            level="ERROR",
+            phase="reranking",
+            component="reranking",
+            message=f"Reranking failed: {str(exc)}",
+            duration_ms=reranking_duration_ms,
+            error=exc,
+        )
         return [(5.0, chunk) for chunk in rerank_chunks]

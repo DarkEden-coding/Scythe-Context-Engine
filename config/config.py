@@ -15,6 +15,7 @@ from openrouter_client import OpenRouterClient
 from groq_client import GroqClient
 from groq_batch_client import GroqBatchClient
 from config.pattern_matcher import FilePatternMatcher
+from utils.logger import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +118,26 @@ def _retry_with_backoff(func, *args, **kwargs):
     """Utility for retrying API calls with exponential backoff on rate limits only."""
     max_retries = 5
     base_delay = 2.0
+    retry_start_time = time.time()
     for attempt in range(max_retries):
         try:
-            return func(*args, **kwargs)
+            result = func(*args, **kwargs)
+            # Log successful retry if this wasn't the first attempt
+            if attempt > 0:
+                total_duration_ms = (time.time() - retry_start_time) * 1000
+                log_event(
+                    event="retry_success",
+                    level="INFO",
+                    phase="query",
+                    component="config",
+                    message=f"Operation succeeded on attempt {attempt + 1}",
+                    data={
+                        "operation": func.__name__,
+                        "attempt": attempt + 1,
+                    },
+                    duration_ms=total_duration_ms,
+                )
+            return result
         except Exception as e:
             # Only retry on 429 rate limit errors
             is_rate_limit = "429" in str(e) or "rate" in str(e).lower()
@@ -132,9 +150,41 @@ def _retry_with_backoff(func, *args, **kwargs):
                     delay,
                     e,
                 )
+                log_event(
+                    event="retry_attempt",
+                    level="WARNING",
+                    phase="query",
+                    component="config",
+                    message=f"Rate limit hit, retrying (attempt {attempt + 1}/{max_retries})",
+                    data={
+                        "operation": func.__name__,
+                        "attempt": attempt + 1,
+                        "max_retries": max_retries,
+                        "delay_seconds": delay,
+                        "error_type": type(e).__name__,
+                    },
+                    error=e,
+                )
                 time.sleep(delay)
             else:
                 # Non-rate-limit errors or final attempt - raise immediately
+                if attempt > 0:
+                    total_duration_ms = (time.time() - retry_start_time) * 1000
+                    log_event(
+                        event="retry_failed",
+                        level="ERROR",
+                        phase="query",
+                        component="config",
+                        message=f"Operation failed after {attempt + 1} attempts",
+                        data={
+                            "operation": func.__name__,
+                            "attempts": attempt + 1,
+                            "max_retries": max_retries,
+                            "error_type": type(e).__name__,
+                        },
+                        duration_ms=total_duration_ms,
+                        error=e,
+                    )
                 raise
     return None
 

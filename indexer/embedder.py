@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Dict, List
 
 import faiss
@@ -16,6 +17,7 @@ import numpy as np
 from tqdm import tqdm
 
 from config.config import EMBEDDING_MODEL, embed_texts
+from utils.logger import log_event
 
 
 def embed_batch_with_retry(batch_idx: int, batch_texts: List[str]) -> tuple:
@@ -87,9 +89,25 @@ def create_faiss_index(chunks: List[Dict], quiet: bool = False) -> tuple:
     Returns:
         Tuple containing (faiss_index, embedding_dimension).
     """
+    embedding_start_time = time.time()
+
     # Identify chunks that need embedding
     chunks_to_embed = [c for c in chunks if "embedding" not in c]
     texts_to_embed = [c["text"] for c in chunks_to_embed]
+
+    # Log start of embedding phase
+    log_event(
+        event="embedding_phase_start",
+        level="INFO",
+        phase="indexing",
+        component="embedder",
+        message="Starting embedding phase",
+        data={
+            "total_chunks": len(chunks),
+            "chunks_to_embed": len(chunks_to_embed),
+            "model": EMBEDDING_MODEL,
+        },
+    )
 
     if texts_to_embed:
         # Batch embed with nomic
@@ -101,6 +119,19 @@ def create_faiss_index(chunks: List[Dict], quiet: bool = False) -> tuple:
         for i in range(0, len(texts_to_embed), batch_size):
             batch_texts = texts_to_embed[i : i + batch_size]
             batches.append((i // batch_size, batch_texts))
+
+        # Log batch start
+        log_event(
+            event="embedding_batch_start",
+            level="INFO",
+            phase="indexing",
+            component="embedder",
+            message="Starting embedding batches",
+            data={
+                "batch_size": batch_size,
+                "total_batches": len(batches),
+            },
+        )
 
         # Thread-safe embeddings list
         embeddings_lock = threading.Lock()
@@ -136,11 +167,36 @@ def create_faiss_index(chunks: List[Dict], quiet: bool = False) -> tuple:
             if new_embeddings[i] is not None:
                 chunk["embedding"] = new_embeddings[i]
 
+        embedding_batch_duration_ms = (time.time() - embedding_start_time) * 1000
+        log_event(
+            event="embedding_batch_complete",
+            level="INFO",
+            phase="indexing",
+            component="embedder",
+            message="Completed embedding batches",
+            data={
+                "total_batches": len(batches),
+                "embeddings_generated": len([e for e in new_embeddings if e is not None]),
+            },
+            duration_ms=embedding_batch_duration_ms,
+        )
+
     # Filter out chunks that still don't have embeddings (failed to embed)
     successful_chunks = [c for c in chunks if "embedding" in c]
     missing_count = len(chunks) - len(successful_chunks)
     if missing_count > 0:
         print(f"Warning: {missing_count} chunks failed to embed and will be skipped", file=sys.stderr)
+        log_event(
+            event="embedding_skipped_chunks",
+            level="WARNING",
+            phase="indexing",
+            component="embedder",
+            message=f"{missing_count} chunks failed to embed",
+            data={
+                "skipped_chunks": missing_count,
+                "successful_chunks": len(successful_chunks),
+            },
+        )
 
     # Update the chunks list in place if possible, or return the successful ones
     # For FAISS, we need the array of all successful embeddings
@@ -153,6 +209,20 @@ def create_faiss_index(chunks: List[Dict], quiet: bool = False) -> tuple:
     d = all_embeddings.shape[1]
     index = faiss.IndexFlatIP(d)  # type: ignore  # Inner product = cosine (normalized)
     index.add(all_embeddings)  # type: ignore
+
+    embedding_total_duration_ms = (time.time() - embedding_start_time) * 1000
+    log_event(
+        event="embedding_phase_complete",
+        level="INFO",
+        phase="indexing",
+        component="embedder",
+        message="Embedding phase completed",
+        data={
+            "embedding_dimension": d,
+            "indexed_chunks": len(successful_chunks),
+        },
+        duration_ms=embedding_total_duration_ms,
+    )
 
     # Return the potentially filtered list of chunks as well
     return index, d, successful_chunks
@@ -170,14 +240,36 @@ def save_index(
         output_prefix: Directory prefix for output files.
         embedding_dim: Dimension of the embeddings.
     """
+    save_start_time = time.time()
+
+    # Log index save start
+    log_event(
+        event="index_save_start",
+        level="INFO",
+        phase="indexing",
+        component="embedder",
+        message="Starting index save",
+        data={
+            "output_prefix": str(output_prefix),
+            "chunks_count": len(chunks),
+            "embedding_dim": embedding_dim,
+        },
+    )
+
     os.makedirs(output_prefix, exist_ok=True)
 
-    faiss.write_index(index, f"{output_prefix}/index.faiss")  # type: ignore
+    # Save FAISS index
+    index_file = f"{output_prefix}/index.faiss"
+    faiss.write_index(index, index_file)  # type: ignore
 
-    with open(f"{output_prefix}/chunks.pkl", "wb") as f:
+    # Save chunks
+    chunks_file = f"{output_prefix}/chunks.pkl"
+    with open(chunks_file, "wb") as f:
         pickle.dump(chunks, f)
 
-    with open(f"{output_prefix}/meta.json", "w") as f:
+    # Save metadata
+    meta_file = f"{output_prefix}/meta.json"
+    with open(meta_file, "w") as f:
         json.dump(
             {
                 "repo_path": repo_path,
@@ -188,3 +280,25 @@ def save_index(
             f,
             indent=2,
         )
+
+    # Calculate index size
+    try:
+        index_size_mb = Path(index_file).stat().st_size / (1024 * 1024)
+    except Exception:
+        index_size_mb = 0
+
+    save_duration_ms = (time.time() - save_start_time) * 1000
+    log_event(
+        event="index_saved",
+        level="INFO",
+        phase="indexing",
+        component="embedder",
+        message="Index saved successfully",
+        data={
+            "total_chunks": len(chunks),
+            "embedding_dim": embedding_dim,
+            "index_size_mb": round(index_size_mb, 2),
+            "output_prefix": str(output_prefix),
+        },
+        duration_ms=save_duration_ms,
+    )

@@ -2,10 +2,14 @@
 Groq API client for chat completions.
 """
 
+import json
+import time
 from typing import Any, Dict, Optional, Sequence
 
 import requests
 from requests.adapters import HTTPAdapter
+
+from utils.logger import log_event
 
 
 class GroqError(Exception):
@@ -69,7 +73,7 @@ class GroqClient:
             payload["response_format"] = response_format
         if options:
             payload.update(options)
-        return self._post("/chat/completions", payload)
+        return self._post("/chat/completions", payload, options=options)
 
     def generate_text(
         self,
@@ -100,24 +104,110 @@ class GroqClient:
             raise GroqError("Chat completion message missing content.")
         return content
 
-    def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _post(
+        self, path: str, payload: Dict[str, Any], options: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """Execute an authenticated POST request."""
+        request_start_time = time.time()
         url = f"{self.API_BASE}{path}"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+        # Log LLM request
+        try:
+            request_size = len(json.dumps(payload))
+            prompt_tokens_estimate = len(str(payload.get("messages", []))) // 4
+            log_event(
+                event="llm_request",
+                level="INFO",
+                phase="query",
+                component="groq_client",
+                message="Sending request to Groq API",
+                data={
+                    "provider": "groq",
+                    "model": payload.get("model"),
+                    "endpoint": path,
+                    "request_size_bytes": request_size,
+                    "prompt_tokens_estimate": prompt_tokens_estimate,
+                    "options": options or {},
+                },
+            )
+        except Exception:
+            pass  # Silently ignore logging errors
+
         try:
             response = self.session.post(
                 url, headers=headers, json=payload, timeout=self.timeout_seconds
             )
         except requests.RequestException as exc:
+            request_duration_ms = (time.time() - request_start_time) * 1000
+            log_event(
+                event="llm_error",
+                level="ERROR",
+                phase="query",
+                component="groq_client",
+                message=f"Groq request error: {str(exc)}",
+                duration_ms=request_duration_ms,
+                error=exc,
+            )
             raise GroqError(f"Groq request error: {exc}") from exc
+
         if response.status_code >= 400:
+            request_duration_ms = (time.time() - request_start_time) * 1000
+            log_event(
+                event="llm_error",
+                level="ERROR",
+                phase="query",
+                component="groq_client",
+                message=f"Groq request failed with status {response.status_code}",
+                data={
+                    "status_code": response.status_code,
+                },
+                duration_ms=request_duration_ms,
+            )
             raise GroqError(
                 f"Groq request failed ({response.status_code}): {response.text}"
             )
+
         try:
-            return response.json()
+            response_json = response.json()
+
+            # Log LLM response
+            request_duration_ms = (time.time() - request_start_time) * 1000
+            try:
+                completion_tokens = response_json.get("usage", {}).get("completion_tokens", 0)
+                prompt_tokens = response_json.get("usage", {}).get("prompt_tokens", 0)
+                total_tokens = response_json.get("usage", {}).get("total_tokens", 0)
+
+                log_event(
+                    event="llm_response",
+                    level="INFO",
+                    phase="query",
+                    component="groq_client",
+                    message="Received response from Groq API",
+                    data={
+                        "status_code": response.status_code,
+                        "completion_tokens": completion_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "total_tokens": total_tokens,
+                    },
+                    duration_ms=request_duration_ms,
+                )
+            except Exception:
+                pass  # Silently ignore logging errors
+
+            return response_json
         except ValueError as exc:
+            request_duration_ms = (time.time() - request_start_time) * 1000
+            log_event(
+                event="llm_error",
+                level="ERROR",
+                phase="query",
+                component="groq_client",
+                message="Groq response is not valid JSON",
+                duration_ms=request_duration_ms,
+                error=exc,
+            )
             raise GroqError("Groq response is not valid JSON.") from exc

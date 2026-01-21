@@ -2,10 +2,14 @@
 OpenRouter API client utilities.
 """
 
+import json
+import time
 from typing import Any, Dict, List, Optional, Sequence
 
 import requests
 from requests.adapters import HTTPAdapter
+
+from utils.logger import log_event
 
 
 class OpenRouterError(Exception):
@@ -144,22 +148,106 @@ class OpenRouterClient:
 
     def _post(self, path: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute an authenticated POST request."""
+        request_start_time = time.time()
         url = f"{self.api_base}{path}"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+        # Log LLM request
+        try:
+            request_size = len(json.dumps(payload))
+            prompt_tokens_estimate = len(str(payload.get("messages", []))) // 4
+            log_event(
+                event="llm_request",
+                level="INFO",
+                phase="query",
+                component="openrouter_client",
+                message="Sending request to OpenRouter API",
+                data={
+                    "provider": "openrouter",
+                    "model": payload.get("model"),
+                    "endpoint": path,
+                    "request_size_bytes": request_size,
+                    "prompt_tokens_estimate": prompt_tokens_estimate,
+                    "options": {k: v for k, v in payload.items() if k not in ["messages", "model"]},
+                },
+            )
+        except Exception:
+            pass  # Silently ignore logging errors
+
         try:
             response = self.session.post(
                 url, headers=headers, json=payload, timeout=self.timeout_seconds
             )
         except requests.RequestException as exc:
+            request_duration_ms = (time.time() - request_start_time) * 1000
+            log_event(
+                event="llm_error",
+                level="ERROR",
+                phase="query",
+                component="openrouter_client",
+                message=f"OpenRouter request error: {str(exc)}",
+                duration_ms=request_duration_ms,
+                error=exc,
+            )
             raise OpenRouterError(f"OpenRouter request error: {exc}") from exc
+
         if response.status_code >= 400:
+            request_duration_ms = (time.time() - request_start_time) * 1000
+            log_event(
+                event="llm_error",
+                level="ERROR",
+                phase="query",
+                component="openrouter_client",
+                message=f"OpenRouter request failed with status {response.status_code}",
+                data={
+                    "status_code": response.status_code,
+                },
+                duration_ms=request_duration_ms,
+            )
             raise OpenRouterError(
                 f"OpenRouter request failed ({response.status_code}): {response.text}"
             )
+
         try:
-            return response.json()
+            response_json = response.json()
+
+            # Log LLM response
+            request_duration_ms = (time.time() - request_start_time) * 1000
+            try:
+                completion_tokens = response_json.get("usage", {}).get("completion_tokens", 0)
+                prompt_tokens = response_json.get("usage", {}).get("prompt_tokens", 0)
+                total_tokens = response_json.get("usage", {}).get("total_tokens", 0)
+
+                log_event(
+                    event="llm_response",
+                    level="INFO",
+                    phase="query",
+                    component="openrouter_client",
+                    message="Received response from OpenRouter API",
+                    data={
+                        "status_code": response.status_code,
+                        "completion_tokens": completion_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "total_tokens": total_tokens,
+                    },
+                    duration_ms=request_duration_ms,
+                )
+            except Exception:
+                pass  # Silently ignore logging errors
+
+            return response_json
         except ValueError as exc:
+            request_duration_ms = (time.time() - request_start_time) * 1000
+            log_event(
+                event="llm_error",
+                level="ERROR",
+                phase="query",
+                component="openrouter_client",
+                message="OpenRouter response is not valid JSON",
+                duration_ms=request_duration_ms,
+                error=exc,
+            )
             raise OpenRouterError("OpenRouter response is not valid JSON.") from exc

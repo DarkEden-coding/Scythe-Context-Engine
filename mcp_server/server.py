@@ -1,5 +1,7 @@
 import hashlib
 import sys
+import time
+import uuid
 from pathlib import Path
 import tiktoken
 
@@ -20,6 +22,15 @@ if project_root not in sys.path:
 from mcp.server.fastmcp import FastMCP
 from index_repo import index_repo
 from query_context.query import query_context
+from utils.logger import (
+    init_logging_system,
+    set_query_context,
+    create_query_logger,
+    log_event,
+)
+
+# Initialize logging system before FastMCP
+init_logging_system()
 
 # Initialize FastMCP server
 mcp = FastMCP("Scythe Context Engine")
@@ -91,7 +102,30 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
         project_location: The absolute path to the project root directory on the local machine.
         token_limit: Maximum token count for the output (default 5000 tokens). Results exceeding this limit will be truncated.
     """
+    # Generate unique query_id and initialize query context
+    query_id = f"{uuid.uuid4().hex[:16]}"
+    set_query_context(query_id, query_text=query_text, project_location=project_location)
+
+    # Create query-specific log file
+    create_query_logger(query_id)
+
+    query_start_time = time.time()
+
     try:
+        # Log query entry
+        log_event(
+            event="query_start",
+            level="INFO",
+            phase="server",
+            component="mcp_server",
+            message="Query started",
+            data={
+                "query_preview": query_text[:100],
+                "project_location": project_location,
+                "token_limit": token_limit,
+            },
+        )
+
         # Strip non-ASCII characters from inputs
         query_text = _strip_non_ascii(query_text)
         project_location = _strip_non_ascii(project_location)
@@ -106,15 +140,52 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
         index_path.mkdir(parents=True, exist_ok=True)
 
         # 2. Run incremental indexing
+        indexing_start_time = time.time()
+        log_event(
+            event="indexing_phase_start",
+            level="INFO",
+            phase="indexing",
+            component="server",
+            message="Starting indexing phase",
+        )
+
         try:
             index_repo(
                 str(project_path), str(index_path), auto_confirm=True, quiet=True, for_mcp_query=True
             )
+            indexing_duration_ms = (time.time() - indexing_start_time) * 1000
+            log_event(
+                event="indexing_phase_complete",
+                level="INFO",
+                phase="indexing",
+                component="server",
+                message="Indexing phase completed successfully",
+                duration_ms=indexing_duration_ms,
+            )
         except Exception as e:
             # Log indexing errors to stderr but continue to query if possible
+            indexing_duration_ms = (time.time() - indexing_start_time) * 1000
+            log_event(
+                event="indexing_phase_error",
+                level="WARNING",
+                phase="indexing",
+                component="server",
+                message=f"Indexing error (non-fatal): {str(e)}",
+                duration_ms=indexing_duration_ms,
+                error=e,
+            )
             print(f"Indexing error (non-fatal): {e}", file=sys.stderr)
 
         # 3. Perform the query
+        query_phase_start_time = time.time()
+        log_event(
+            event="query_phase_start",
+            level="INFO",
+            phase="query",
+            component="server",
+            message="Starting query phase",
+        )
+
         try:
             result = query_context(
                 query=query_text,
@@ -125,11 +196,40 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
                 token_limit=token_limit,
                 quiet=True,
             )
+            query_phase_duration_ms = (time.time() - query_phase_start_time) * 1000
+            log_event(
+                event="query_phase_complete",
+                level="INFO",
+                phase="query",
+                component="server",
+                message="Query phase completed successfully",
+                duration_ms=query_phase_duration_ms,
+            )
         except UnicodeEncodeError as ue:
             # Handle encoding errors by returning stripped result or error message
+            query_phase_duration_ms = (time.time() - query_phase_start_time) * 1000
+            log_event(
+                event="query_phase_error",
+                level="ERROR",
+                phase="query",
+                component="server",
+                message=f"Encoding error during query: {str(ue)}",
+                duration_ms=query_phase_duration_ms,
+                error=ue,
+            )
             return f"Query completed but encountered encoding issues while processing: {_strip_non_ascii(str(ue))}"
         except Exception as ex:
             # Handle other exceptions
+            query_phase_duration_ms = (time.time() - query_phase_start_time) * 1000
+            log_event(
+                event="query_phase_error",
+                level="ERROR",
+                phase="query",
+                component="server",
+                message=f"Error during query: {str(ex)}",
+                duration_ms=query_phase_duration_ms,
+                error=ex,
+            )
             return f"Query failed: {_strip_non_ascii(str(ex))}"
 
         # Strip non-ASCII characters from result before returning
@@ -140,13 +240,38 @@ def query(query_text: str, project_location: str, token_limit: int = 15000) -> s
             cleaned_result, token_limit
         )
 
+        total_duration_ms = (time.time() - query_start_time) * 1000
+        log_event(
+            event="query_complete",
+            level="INFO",
+            phase="server",
+            component="mcp_server",
+            message="Query completed successfully",
+            data={
+                "result_length": len(cleaned_result),
+                "was_truncated": was_truncated,
+                "token_limit": token_limit,
+            },
+            duration_ms=total_duration_ms,
+        )
+
         if was_truncated:
             truncated_result += (
                 f"\n\n[Result truncated: output exceeded {token_limit} token limit]"
             )
         return truncated_result
     except Exception as e:
+        total_duration_ms = (time.time() - query_start_time) * 1000
         error_msg = _strip_non_ascii(str(e))
+        log_event(
+            event="query_error",
+            level="ERROR",
+            phase="server",
+            component="mcp_server",
+            message=f"Fatal error during query: {error_msg}",
+            duration_ms=total_duration_ms,
+            error=e,
+        )
         return f"Error during query: {error_msg}"
 
 

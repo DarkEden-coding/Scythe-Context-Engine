@@ -7,3 +7,5 @@ indexes/
 __pycache__/
 *.db
 *.pyc
+/logs
+/plans

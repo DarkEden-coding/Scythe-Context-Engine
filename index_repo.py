@@ -9,6 +9,8 @@ Usage: python index_repo.py /path/to/repo --output repo_index
 import argparse
 import json
 import pickle
+import sys
+import time
 from pathlib import Path
 
 from line_profiler import profile
@@ -20,6 +22,7 @@ from indexer.file_processor import (
     process_files,
 )
 from indexer.embedder import create_faiss_index, save_index
+from utils.logger import log_event
 
 
 @profile
@@ -40,154 +43,243 @@ def index_repo(
         for_mcp_query: If True, indicates indexing is triggered by MCP query.
                        Uses MCP-specific batch setting instead of general setting.
     """
+    index_repo_start_time = time.time()
 
     if not quiet:
         print(f"Indexing {repo_path}...")
     repo_path_obj = Path(repo_path)
     output_path = Path(output_prefix)
 
-    # 1. Load existing state if available
-    old_chunks = []
-    old_hashes = {}
-    if (output_path / "chunks.pkl").exists() and (output_path / "meta.json").exists():
-        if not quiet:
-            print("Loading existing index for incremental update...")
-        try:
-            with open(output_path / "chunks.pkl", "rb") as f:
-                old_chunks = pickle.load(f)
-            with open(output_path / "meta.json", "r") as f:
-                meta = json.load(f)
-                old_hashes = meta.get("file_hashes", {})
-        except Exception as e:
+    try:
+        # 1. Load existing state if available
+        old_chunks = []
+        old_hashes = {}
+        if (output_path / "chunks.pkl").exists() and (output_path / "meta.json").exists():
             if not quiet:
-                print(f"Could not load existing index: {e}. Performing full re-index.")
-            old_chunks = []
-            old_hashes = {}
+                print("Loading existing index for incremental update...")
+            try:
+                with open(output_path / "chunks.pkl", "rb") as f:
+                    old_chunks = pickle.load(f)
+                with open(output_path / "meta.json", "r") as f:
+                    meta = json.load(f)
+                    old_hashes = meta.get("file_hashes", {})
+            except Exception as e:
+                if not quiet:
+                    print(f"Could not load existing index: {e}. Performing full re-index.")
+                old_chunks = []
+                old_hashes = {}
 
-    # 2. Collect files and identify changes
-    all_files = collect_files_to_process(repo_path)
-    current_hashes = {str(f.relative_to(repo_path)): hash_file(f) for f in all_files}
+        # 2. Collect files and identify changes
+        all_files = collect_files_to_process(repo_path)
+        current_hashes = {}
 
-    added_files = []
-    modified_files = []
-    unchanged_files = []
-    deleted_files = [f for f in old_hashes if f not in current_hashes]
+        # Hash files with error handling for race conditions (files deleted between discovery and hashing)
+        for f in all_files:
+            try:
+                rel_path = str(f.relative_to(repo_path))
+                current_hashes[rel_path] = hash_file(f)
+            except (FileNotFoundError, OSError) as e:
+                # File disappeared between discovery and hashing - skip it
+                if not quiet:
+                    print(f"Warning: File disappeared during hashing: {f} ({e})", file=sys.stderr)
 
-    for rel_path, current_hash in current_hashes.items():
-        if rel_path not in old_hashes:
-            added_files.append(repo_path_obj / rel_path)
-        elif old_hashes[rel_path] != current_hash:
-            modified_files.append(repo_path_obj / rel_path)
+        added_files = []
+        modified_files = []
+        unchanged_files = []
+        deleted_files = [f for f in old_hashes if f not in current_hashes]
+
+        for rel_path, current_hash in current_hashes.items():
+            if rel_path not in old_hashes:
+                added_files.append(repo_path_obj / rel_path)
+            elif old_hashes[rel_path] != current_hash:
+                modified_files.append(repo_path_obj / rel_path)
+            else:
+                unchanged_files.append(repo_path_obj / rel_path)
+
+        files_to_process = added_files + modified_files
+
+        # 3. Show overview and get confirmation
+        print("\nRepository Overview:")
+        print("=" * 50)
+        if not old_hashes:
+            print(f"  Total files to index: {len(all_files)}")
         else:
-            unchanged_files.append(repo_path_obj / rel_path)
+            print(f"  Unchanged: {len(unchanged_files)}")
+            print(f"  Added:     {len(added_files)}")
+            print(f"  Modified:  {len(modified_files)}")
+            print(f"  Deleted:   {len(deleted_files)}")
+        print("=" * 50)
 
-    files_to_process = added_files + modified_files
-
-    # 3. Show overview and get confirmation
-    print("\nRepository Overview:")
-    print("=" * 50)
-    if not old_hashes:
-        print(f"  Total files to index: {len(all_files)}")
-    else:
-        print(f"  Unchanged: {len(unchanged_files)}")
-        print(f"  Added:     {len(added_files)}")
-        print(f"  Modified:  {len(modified_files)}")
-        print(f"  Deleted:   {len(deleted_files)}")
-    print("=" * 50)
-
-    if not files_to_process and not deleted_files:
-        print("Index is already up to date. No changes detected.")
-        return
-
-    if not auto_confirm:
-        confirm = input("\nProceed with indexing? (y/N): ").lower().strip()
-        if confirm not in ["y", "yes"]:
-            print("Indexing cancelled.")
-            return
-    else:
-        if not quiet:
-            print("\nAuto-confirming indexing...")
-
-    # 4. Filter old chunks (keep only those from unchanged files)
-    # We remove both code chunks and file summaries for modified/deleted files
-    changed_rel_paths = set(
-        [str(f.relative_to(repo_path)) for f in modified_files] + deleted_files
-    )
-
-    # Keep chunks that are NOT from changed files AND are not folder summaries
-    # (folder summaries are regenerated)
-    kept_chunks = [
-        c
-        for c in old_chunks
-        if c.get("metadata", {}).get("file") not in changed_rel_paths
-        and c.get("metadata", {}).get("level") != "folder_summary"
-    ]
-
-    # 5. Process new/modified files
-    new_chunks = []
-    file_summaries = {}
-    if files_to_process:
-        if quiet:
-            print("Indexing...")
-        else:
-            print(f"Processing {len(files_to_process)} changed/new files...")
-        new_chunks, file_summaries = process_files(
-            files_to_process, repo_path, output_prefix, quiet=quiet, for_mcp_query=for_mcp_query
+        # Log repository overview
+        log_event(
+            event="index_repo_start",
+            level="INFO",
+            phase="indexing",
+            component="index_repo",
+            message="Starting repository indexing",
+            data={
+                "repo_path": repo_path,
+                "files_total": len(all_files),
+                "files_unchanged": len(unchanged_files),
+                "files_added": len(added_files),
+                "files_modified": len(modified_files),
+                "files_deleted": len(deleted_files),
+                "is_incremental": bool(old_hashes),
+                "for_mcp_query": for_mcp_query,
+            },
         )
 
-    # Merge file summaries: old ones for unchanged files + new ones
-    all_file_summaries = {}
-    # Extract file summaries from kept_chunks
-    for c in kept_chunks:
-        if c.get("metadata", {}).get("level") == "file_summary":
-            rel_path = c["metadata"]["file"]
-            # Extract the summary text from the chunk text "FILE: rel_path\nsummary"
-            summary = c["text"].split("\n", 1)[1] if "\n" in c["text"] else ""
-            all_file_summaries[rel_path] = summary
+        if not files_to_process and not deleted_files:
+            print("Index is already up to date. No changes detected.")
+            log_event(
+                event="index_repo_complete",
+                level="INFO",
+                phase="indexing",
+                component="index_repo",
+                message="Index already up to date",
+                data={
+                    "total_chunks": len(old_chunks),
+                    "skipped_reason": "no_changes",
+                },
+                duration_ms=(time.time() - index_repo_start_time) * 1000,
+            )
+            return
 
-    all_file_summaries.update(file_summaries)
+        if not auto_confirm:
+            confirm = input("\nProceed with indexing? (y/N): ").lower().strip()
+            if confirm not in ["y", "yes"]:
+                print("Indexing cancelled.")
+                log_event(
+                    event="index_repo_cancelled",
+                    level="INFO",
+                    phase="indexing",
+                    component="index_repo",
+                    message="Indexing cancelled by user",
+                    duration_ms=(time.time() - index_repo_start_time) * 1000,
+                )
+                return
+        else:
+            if not quiet:
+                print("\nAuto-confirming indexing...")
 
-    # Combine chunks
-    combined_chunks = kept_chunks + new_chunks
+        # 4. Filter old chunks (keep only those from unchanged files)
+        # We remove both code chunks and file summaries for modified/deleted files
+        changed_rel_paths = set(
+            [str(f.relative_to(repo_path)) for f in modified_files] + deleted_files
+        )
 
-    # 6. Generate folder summaries (always regenerate to stay accurate)
-    if quiet:
-        print("Summarizing...")
-    else:
-        print("Generating folder summaries...")
-    final_chunks = generate_folder_summaries(
-        all_file_summaries, combined_chunks, quiet=quiet
-    )
+        # Keep chunks that are NOT from changed files AND are not folder summaries
+        # (folder summaries are regenerated)
+        kept_chunks = [
+            c
+            for c in old_chunks
+            if c.get("metadata", {}).get("file") not in changed_rel_paths
+            and c.get("metadata", {}).get("level") != "folder_summary"
+        ]
 
-    if not quiet:
-        print(f"Total chunks: {len(final_chunks)} ({len(new_chunks)} new/updated)")
+        # 5. Process new/modified files
+        new_chunks = []
+        file_summaries = {}
+        if files_to_process:
+            if quiet:
+                print("Indexing...")
+            else:
+                print(f"Processing {len(files_to_process)} changed/new files...")
+            new_chunks, file_summaries = process_files(
+                files_to_process, repo_path, output_prefix, quiet=quiet, for_mcp_query=for_mcp_query
+            )
 
-    # 7. Create FAISS index
-    if quiet:
-        print("Embedding...")
-    else:
-        print("Embedding chunks...")
-    index, embedding_dim, indexed_chunks = create_faiss_index(final_chunks, quiet=quiet)
+        # Merge file summaries: old ones for unchanged files + new ones
+        all_file_summaries = {}
+        # Extract file summaries from kept_chunks
+        for c in kept_chunks:
+            if c.get("metadata", {}).get("level") == "file_summary":
+                rel_path = c["metadata"]["file"]
+                # Extract the summary text from the chunk text "FILE: rel_path\nsummary"
+                summary = c["text"].split("\n", 1)[1] if "\n" in c["text"] else ""
+                all_file_summaries[rel_path] = summary
 
-    # 8. Save index and update metadata with hashes
-    if quiet:
-        print("Saving...")
-    else:
-        print("Saving index...")
-    save_index(index, indexed_chunks, repo_path, output_prefix, embedding_dim)
+        all_file_summaries.update(file_summaries)
 
-    # Update meta.json with file hashes
-    with open(output_path / "meta.json", "r") as f:
-        meta = json.load(f)
+        # Combine chunks
+        combined_chunks = kept_chunks + new_chunks
 
-    meta["file_hashes"] = current_hashes
-    with open(output_path / "meta.json", "w") as f:
-        json.dump(meta, f, indent=2)
+        # 6. Generate folder summaries (always regenerate to stay accurate)
+        if quiet:
+            print("Summarizing...")
+        else:
+            print("Generating folder summaries...")
+        final_chunks = generate_folder_summaries(
+            all_file_summaries, combined_chunks, quiet=quiet
+        )
 
-    if quiet:
-        print("Indexed.")
-    else:
-        print(f"Index updated in {output_prefix}/ ({len(indexed_chunks)} chunks)")
+        if not quiet:
+            print(f"Total chunks: {len(final_chunks)} ({len(new_chunks)} new/updated)")
+
+        # 7. Create FAISS index
+        if quiet:
+            print("Embedding...")
+        else:
+            print("Embedding chunks...")
+        index, embedding_dim, indexed_chunks = create_faiss_index(final_chunks, quiet=quiet)
+
+        # 8. Save index and update metadata with hashes
+        if quiet:
+            print("Saving...")
+        else:
+            print("Saving index...")
+        save_index(index, indexed_chunks, repo_path, output_prefix, embedding_dim)
+
+        # Update meta.json with file hashes
+        meta_path = output_path / "meta.json"
+        try:
+            with open(meta_path, "r") as f:
+                meta = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            # If meta.json doesn't exist or is corrupt, create a minimal structure
+            meta = {
+                "repo_path": repo_path,
+                "total_chunks": len(indexed_chunks),
+                "embedding_dim": embedding_dim,
+                "model": "nomic-embed-text-v1.5",
+            }
+
+        meta["file_hashes"] = current_hashes
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+        if quiet:
+            print("Indexed.")
+        else:
+            print(f"Index updated in {output_prefix}/ ({len(indexed_chunks)} chunks)")
+
+        # Log completion
+        log_event(
+            event="index_repo_complete",
+            level="INFO",
+            phase="indexing",
+            component="index_repo",
+            message="Repository indexing completed successfully",
+            data={
+                "total_chunks": len(indexed_chunks),
+                "new_chunks": len(new_chunks),
+                "kept_chunks": len(kept_chunks),
+                "embedding_dimension": embedding_dim,
+                "index_path": str(output_prefix),
+            },
+            duration_ms=(time.time() - index_repo_start_time) * 1000,
+        )
+    except Exception as e:
+        log_event(
+            event="index_repo_error",
+            level="ERROR",
+            phase="indexing",
+            component="index_repo",
+            message=f"Error during indexing: {str(e)}",
+            duration_ms=(time.time() - index_repo_start_time) * 1000,
+            error=e,
+        )
+        raise
 
 
 if __name__ == "__main__":

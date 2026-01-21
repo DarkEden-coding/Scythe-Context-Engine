@@ -1,9 +1,11 @@
 """Refinement functionality for query context."""
 
+import time
 import tiktoken
 from typing import Dict, List
 
 from config.config import SUMMARIZATION_MODEL, generate_text
+from utils.logger import log_event
 from indexer.chunk_storage import load_full_chunk
 from .rendering import _render_context_sections
 from .reranking import _score_chunks_with_model, _select_rerank_candidates
@@ -124,26 +126,87 @@ def rerank_and_extract(
     Returns:
         Refined context string with essential information extracted by LLM.
     """
+    refinement_start_time = time.time()
+
+    log_event(
+        event="refinement_start",
+        level="INFO",
+        phase="refinement",
+        component="refinement",
+        message="Starting refinement phase",
+        data={
+            "top_chunks_count": top_k,
+            "query_length": len(query),
+            "token_limit": token_limit,
+            "model": SUMMARIZATION_MODEL,
+        },
+    )
 
     rerank_chunks = _select_rerank_candidates(chunks)
     scored_chunks = _score_chunks_with_model(rerank_chunks, query)
     scored_chunks.sort(reverse=True, key=lambda item: item[0])
     top_chunks = [chunk for _, chunk in scored_chunks[:top_k]]
+
+    # Count tokens in chunks
+    encoding = tiktoken.get_encoding("cl100k_base")
+    total_chunk_tokens = sum(_count_tokens(chunk.get("text", "")) for chunk in top_chunks)
+
+    log_event(
+        event="chunks_loaded",
+        level="INFO",
+        phase="refinement",
+        component="refinement",
+        message="Loaded chunks for refinement",
+        data={
+            "chunks_loaded": len(top_chunks),
+            "total_code_tokens": total_chunk_tokens,
+            "prompt_tokens_estimate": _count_tokens(query) + 500,
+        },
+    )
+
     if not top_chunks:
         return "query invalid, no related chunks found\nTry with a different query. Or search for context yourself"
     refine_prompt = _build_refinement_prompt(query, top_chunks, index_prefix, token_limit)
 
     try:
+        llm_start_time = time.time()
         refined_text = generate_text(
             refine_prompt,
             model=SUMMARIZATION_MODEL,
             options={"temperature": 0.2},
         )
+        llm_duration_ms = (time.time() - llm_start_time) * 1000
         rendered_chunks = _render_context_sections(top_chunks, index_prefix)
         combined = refined_text.strip() + "\n\n" + rendered_chunks
-        encoding = tiktoken.get_encoding("cl100k_base")
         tokens = len(encoding.encode(combined))
+
+        log_event(
+            event="refinement_complete",
+            level="INFO",
+            phase="refinement",
+            component="refinement",
+            message="Refinement completed",
+            data={
+                "output_tokens": tokens,
+                "llm_duration_ms": llm_duration_ms,
+            },
+            duration_ms=(time.time() - refinement_start_time) * 1000,
+        )
+
         if tokens > token_limit:
+            log_event(
+                event="token_budget_exceeded",
+                level="INFO",
+                phase="refinement",
+                component="refinement",
+                message="Output exceeds token limit, reducing chunks",
+                data={
+                    "current_tokens": tokens,
+                    "token_limit": token_limit,
+                    "excess_tokens": tokens - token_limit,
+                    "chunks_before": len(top_chunks),
+                },
+            )
             # Reduce chunks until under limit
             for i in range(len(top_chunks) - 1, -1, -1):
                 reduced_chunks = top_chunks[:i + 1]
@@ -156,5 +219,14 @@ def rerank_and_extract(
             return refined_text.strip()
         return combined
 
-    except Exception:
+    except Exception as e:
+        log_event(
+            event="refinement_error",
+            level="ERROR",
+            phase="refinement",
+            component="refinement",
+            message=f"Refinement error: {str(e)}",
+            duration_ms=(time.time() - refinement_start_time) * 1000,
+            error=e,
+        )
         return _render_context_sections(top_chunks, index_prefix)

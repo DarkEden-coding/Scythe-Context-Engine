@@ -4,11 +4,12 @@ Groq Batch API client for asynchronous bulk processing.
 
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional
 
 import requests
 from requests.adapters import HTTPAdapter
+
+from utils.logger import log_event
 
 BatchStatus = Literal[
     "validating",
@@ -279,9 +280,27 @@ class GroqBatchClient:
                 url, headers=headers, json=payload, timeout=self.timeout_seconds
             )
         except requests.RequestException as exc:
+            log_event(
+                event="batch_job_error",
+                level="ERROR",
+                phase="indexing",
+                component="groq_batch_client",
+                message=f"Batch creation request failed: {str(exc)}",
+                error=exc,
+            )
             raise GroqBatchError(f"Batch creation request failed: {exc}") from exc
 
         if response.status_code >= 400:
+            log_event(
+                event="batch_job_error",
+                level="ERROR",
+                phase="indexing",
+                component="groq_batch_client",
+                message=f"Batch creation failed with status {response.status_code}",
+                data={
+                    "status_code": response.status_code,
+                },
+            )
             raise GroqBatchError(
                 f"Batch creation failed ({response.status_code}): {response.text}"
             )
@@ -289,9 +308,33 @@ class GroqBatchClient:
         try:
             data = response.json()
         except ValueError as exc:
+            log_event(
+                event="batch_job_error",
+                level="ERROR",
+                phase="indexing",
+                component="groq_batch_client",
+                message="Batch creation response is not valid JSON",
+                error=exc,
+            )
             raise GroqBatchError("Batch creation response is not valid JSON.") from exc
 
-        return BatchJob.from_dict(data)
+        batch_job = BatchJob.from_dict(data)
+
+        log_event(
+            event="batch_job_created",
+            level="INFO",
+            phase="indexing",
+            component="groq_batch_client",
+            message="Batch job created successfully",
+            data={
+                "job_id": batch_job.id,
+                "status": batch_job.status,
+                "completion_window": completion_window,
+                "expires_at": batch_job.expires_at,
+            },
+        )
+
+        return batch_job
 
     def get_batch(self, batch_id: str) -> BatchJob:
         """Get current batch job status.
@@ -316,9 +359,28 @@ class GroqBatchClient:
                 url, headers=headers, timeout=self.timeout_seconds
             )
         except requests.RequestException as exc:
+            log_event(
+                event="batch_job_error",
+                level="ERROR",
+                phase="indexing",
+                component="groq_batch_client",
+                message=f"Get batch request failed: {str(exc)}",
+                error=exc,
+            )
             raise GroqBatchError(f"Get batch request failed: {exc}") from exc
 
         if response.status_code >= 400:
+            log_event(
+                event="batch_job_error",
+                level="ERROR",
+                phase="indexing",
+                component="groq_batch_client",
+                message=f"Get batch failed with status {response.status_code}",
+                data={
+                    "batch_id": batch_id,
+                    "status_code": response.status_code,
+                },
+            )
             raise GroqBatchError(
                 f"Get batch failed ({response.status_code}): {response.text}"
             )
@@ -326,6 +388,14 @@ class GroqBatchClient:
         try:
             data = response.json()
         except ValueError as exc:
+            log_event(
+                event="batch_job_error",
+                level="ERROR",
+                phase="indexing",
+                component="groq_batch_client",
+                message="Get batch response is not valid JSON",
+                error=exc,
+            )
             raise GroqBatchError("Get batch response is not valid JSON.") from exc
 
         return BatchJob.from_dict(data)

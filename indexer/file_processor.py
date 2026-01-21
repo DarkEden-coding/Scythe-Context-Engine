@@ -6,6 +6,7 @@ import hashlib
 import os
 import sys
 import threading
+import time
 import traceback
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -30,6 +31,7 @@ from .summarizer import (
     summarize_folder,
 )
 from .chunk_storage import generate_chunk_id, save_full_chunk
+from utils.logger import log_event
 
 
 def hash_file(file_path: Path) -> str:
@@ -273,6 +275,7 @@ def process_files(
         Tuple containing (chunks, file_summaries) where chunks is a list of all extracted chunks
         and file_summaries is a dict mapping file paths to their summaries.
     """
+    file_processing_start_time = time.time()
     chunks = []
     file_summaries = {}
     errors = []
@@ -282,6 +285,21 @@ def process_files(
     use_batch = (
         (USE_BATCH_FOR_MCP_INCREMENTAL_INDEXING if for_mcp_query else USE_BATCH_FOR_INDEXING)
         and batch_client is not None
+    )
+
+    # Log batch mode decision
+    provider = "groq" if batch_client else None
+    log_event(
+        event="batch_mode_decision",
+        level="INFO",
+        phase="indexing",
+        component="file_processor",
+        message=f"Batch mode {'enabled' if use_batch else 'disabled'}",
+        data={
+            "use_batch": use_batch,
+            "request_count": len(files_to_process),
+            "provider": provider,
+        },
     )
 
     if use_batch:
@@ -387,6 +405,24 @@ def process_files(
                         f"Batch summarization failed, keeping individual summaries: {e}",
                         file=sys.stderr,
                     )
+
+    # Log batch processing completion
+    file_processing_duration_ms = (time.time() - file_processing_start_time) * 1000
+    log_event(
+        event="batch_processing_complete",
+        level="INFO",
+        phase="indexing",
+        component="file_processor",
+        message="File processing completed",
+        data={
+            "total_files_processed": len(files_to_process),
+            "total_chunks": len(chunks),
+            "total_summaries": len(file_summaries),
+            "errors": len(errors),
+            "use_batch": use_batch,
+        },
+        duration_ms=file_processing_duration_ms,
+    )
 
     return chunks, file_summaries
 
