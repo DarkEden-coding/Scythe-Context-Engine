@@ -54,7 +54,8 @@ def index_repo(
         # 1. Load existing state if available
         old_chunks = []
         old_hashes = {}
-        if (output_path / "chunks.pkl").exists() and (output_path / "meta.json").exists():
+        is_incremental = (output_path / "chunks.pkl").exists() and (output_path / "meta.json").exists()
+        if is_incremental:
             if not quiet:
                 print("Loading existing index for incremental update...")
             try:
@@ -186,7 +187,7 @@ def index_repo(
             else:
                 print(f"Processing {len(files_to_process)} changed/new files...")
             new_chunks, file_summaries = process_files(
-                files_to_process, repo_path, output_prefix, quiet=quiet, for_mcp_query=for_mcp_query
+                files_to_process, repo_path, output_prefix, quiet=quiet, for_mcp_query=for_mcp_query, is_incremental=is_incremental
             )
 
         # Merge file summaries: old ones for unchanged files + new ones
@@ -210,7 +211,7 @@ def index_repo(
         else:
             print("Generating folder summaries...")
         final_chunks = generate_folder_summaries(
-            all_file_summaries, combined_chunks, quiet=quiet
+            all_file_summaries, combined_chunks, quiet=quiet, is_incremental=is_incremental, for_mcp_query=for_mcp_query
         )
 
         if not quiet:

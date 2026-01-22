@@ -260,6 +260,7 @@ def process_files(
     output_prefix: Optional[str] = None,
     quiet: bool = False,
     for_mcp_query: bool = False,
+    is_incremental: bool = False,
 ) -> tuple:
     """Process files to extract chunks and file summaries using multithreading.
 
@@ -269,6 +270,7 @@ def process_files(
         output_prefix: Directory prefix for output files (for saving full chunks).
         quiet: If True, suppress progress bars.
         for_mcp_query: If True, indicates processing is triggered by MCP query.
+        is_incremental: If True, this is an incremental update; if False, first-time indexing.
                        Uses MCP-specific batch setting instead of general setting.
 
     Returns:
@@ -282,10 +284,19 @@ def process_files(
 
     # Check if batch mode is configured BEFORE processing
     batch_client = get_groq_batch_client()
-    use_batch = (
-        (USE_BATCH_FOR_MCP_INCREMENTAL_INDEXING if for_mcp_query else USE_BATCH_FOR_INDEXING)
-        and batch_client is not None
-    )
+
+    # Batch mode logic:
+    # - First-time indexing (is_incremental=False): Always use batch if available
+    # - Incremental indexing (is_incremental=True): Use batch only if setting enabled for MCP queries
+    if is_incremental:
+        # Incremental: respect the MCP-specific setting
+        use_batch = (
+            (USE_BATCH_FOR_MCP_INCREMENTAL_INDEXING if for_mcp_query else USE_BATCH_FOR_INDEXING)
+            and batch_client is not None
+        )
+    else:
+        # First-time indexing: always use batch if available
+        use_batch = batch_client is not None
 
     # Log batch mode decision
     provider = "groq" if batch_client else None
@@ -297,6 +308,8 @@ def process_files(
         message=f"Batch mode {'enabled' if use_batch else 'disabled'}",
         data={
             "use_batch": use_batch,
+            "is_incremental": is_incremental,
+            "for_mcp_query": for_mcp_query,
             "request_count": len(files_to_process),
             "provider": provider,
         },
@@ -429,7 +442,7 @@ def process_files(
 
 @profile
 def generate_folder_summaries(
-    file_summaries: Dict[str, str], chunks: List[Dict], quiet: bool = False
+    file_summaries: Dict[str, str], chunks: List[Dict], quiet: bool = False, is_incremental: bool = False, for_mcp_query: bool = False
 ) -> List[Dict]:
     """Generate folder summaries and add to chunks using multithreading.
 
@@ -437,6 +450,8 @@ def generate_folder_summaries(
         file_summaries: Dictionary mapping file paths to their summaries.
         chunks: List of existing chunks to append folder summaries to.
         quiet: If True, suppress progress bars.
+        is_incremental: If True, this is an incremental update; if False, first-time indexing.
+        for_mcp_query: If True, indicates processing is triggered by MCP query.
 
     Returns:
         Updated chunks list with folder summary chunks added.
@@ -458,7 +473,36 @@ def generate_folder_summaries(
     # Check if batch processing is configured
     batch_client = get_groq_batch_client()
 
-    if USE_BATCH_FOR_INDEXING and batch_client:
+    # Batch mode logic (same as process_files):
+    # - First-time indexing (is_incremental=False): Always use batch if available
+    # - Incremental indexing (is_incremental=True): Use batch only if setting enabled for MCP queries
+    if is_incremental:
+        # Incremental: respect the MCP-specific setting
+        use_batch = (
+            (USE_BATCH_FOR_MCP_INCREMENTAL_INDEXING if for_mcp_query else USE_BATCH_FOR_INDEXING)
+            and batch_client is not None
+        )
+    else:
+        # First-time indexing: always use batch if available
+        use_batch = batch_client is not None
+
+    # Log batch mode decision for folder summarization
+    log_event(
+        event="folder_summarization_batch_decision",
+        level="INFO",
+        phase="indexing",
+        component="file_processor",
+        message=f"Folder summarization batch mode {'enabled' if use_batch else 'disabled'}",
+        data={
+            "use_batch": use_batch,
+            "is_incremental": is_incremental,
+            "for_mcp_query": for_mcp_query,
+            "folder_count": len(folders_to_process),
+            "provider": "groq" if batch_client else None,
+        },
+    )
+
+    if use_batch and batch_client:
         if not quiet:
             print("Using Groq Batch API for folder summarization...")
 

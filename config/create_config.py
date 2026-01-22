@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 DEFAULTS: dict = {
-    "use_batch_for_indexing": False,
+    "use_batch_for_indexing": True,
     "use_batch_for_mcp_incremental_indexing": False,
     "indexing": {
         "supported_languages": {
@@ -250,7 +250,9 @@ def main():
             f_key: str = ""
             while not f_key:
                 f_key = input("Enter OpenRouter API key: ").strip()
-            config["openrouter"]: dict = get_openrouter_config(f_key, skip, use_defaults=True)
+            config["openrouter"]: dict = get_openrouter_config(
+                f_key, skip, use_defaults=True
+            )
             print("✓ OpenRouter configured for embeddings")
         else:  # ollama
             if "ollama" not in config:
